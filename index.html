@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>Condomínio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;background:#f0f4f8;min-height:100vh}
+input,select,button,textarea{font-family:inherit}
+.fade{animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root" style="max-width:430px;margin:0 auto;min-height:100vh"></div>
+<script>
+// ══════════════════════════════════════════════════════
+// CONSTANTS
+// ══════════════════════════════════════════════════════
+const MO=["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+const MF=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const CAT_DESP={luz:"⚡ Conta de Luz",agua:"💧 Conta de Água",manutencao:"🔧 Manutenção",limpeza:"🧹 Limpeza",seguranca:"🔒 Segurança",outros:"📦 Outros"};
+const CAT_COLOR={luz:"#eab308",agua:"#06b6d4",manutencao:"#10b981",limpeza:"#3b82f6",seguranca:"#8b5cf6",outros:"#94a3b8"};
+
+// ══════════════════════════════════════════════════════
+// STORAGE
+// ══════════════════════════════════════════════════════
+function sv(k,v){try{localStorage.setItem("cdm_"+k,JSON.stringify(v))}catch{}}
+function ld(k,d){try{const v=localStorage.getItem("cdm_"+k);return v!=null?JSON.parse(v):d}catch{return d}}
+
+// ══════════════════════════════════════════════════════
+// DEFAULTS
+// ══════════════════════════════════════════════════════
+const D_USERS=[
+  {id:1,nome:"Síndico",login:"sindico",senha:"1234",role:"sindico"},
+  {id:2,nome:"Subsíndico",login:"subsindico",senha:"1234",role:"subsindico"}
+];
+const D_CFG={nomeCondominio:"",endereco:"",ano:new Date().getFullYear(),taxaMensal:50,saldoCaixa:0};
+const D_APTS=["101","102","103","104","105","106"].map(n=>({id:n,numero:n,morador:"",telefone:"",email:"",ativo:true}));
+function mkPay(apts){const p={};apts.forEach(a=>{p[a.id]={};MO.forEach(m=>{p[a.id][m]={pago:false,data:""};});});return p;}
+
+// ══════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════
+let A={
+  user:ld("session",null),
+  users:ld("users",D_USERS),
+  cfg:ld("cfg",D_CFG),
+  apts:ld("apts",D_APTS),
+  pay:ld("pay",null),
+  desp:ld("desp",[]),
+  screen:"home",selApt:null,selMes:null,
+  toast:null,modal:null
+};
+if(!A.pay)A.pay=mkPay(A.apts);
+if(A.cfg.saldoCaixa===undefined)A.cfg.saldoCaixa=0;
+
+function commit(patch){
+  Object.assign(A,patch);
+  sv("session",A.user);sv("users",A.users);sv("cfg",A.cfg);
+  sv("apts",A.apts);sv("pay",A.pay);sv("desp",A.desp);
+  render();
+}
+
+// ══════════════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════════════
+let _tt;
+function toast(msg,type="ok"){
+  clearTimeout(_tt);A.toast={msg,type};render();
+  _tt=setTimeout(()=>{A.toast=null;render();},2600);
+}
+
+// ══════════════════════════════════════════════════════
+// CSS
+// ══════════════════════════════════════════════════════
+const I="width:100%;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 14px;font-size:14px;background:#fff;color:#1e293b;box-sizing:border-box;";
+const B=(bg,c="#fff",extra="")=>`background:${bg};color:${c};border:none;border-radius:13px;padding:13px 18px;font-size:14px;font-weight:700;cursor:pointer;width:100%;${extra}`;
+const K=(b="#e2e8f0",bg="#fff")=>`background:${bg};border:1.5px solid ${b};border-radius:16px;padding:14px;margin-bottom:10px;`;
+const L="font-size:11px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:5px;display:block;";
+const G=(bg,c)=>`background:${bg};color:${c};font-size:10px;font-weight:700;border-radius:20px;padding:3px 9px;display:inline-block;`;
+
+// ══════════════════════════════════════════════════════
+// COMPUTED
+// ══════════════════════════════════════════════════════
+function pctApt(id){let p=0;MO.forEach(m=>{if(A.pay[id]?.[m]?.pago)p++;});return Math.round(p/12*100);}
+function pctMes(m){const ac=A.apts.filter(a=>a.ativo);if(!ac.length)return 0;return Math.round(ac.filter(a=>A.pay[a.id]?.[m]?.pago).length/ac.length*100);}
+function totalArr(){let t=0;const tx=+A.cfg.taxaMensal||0;A.apts.filter(a=>a.ativo).forEach(a=>MO.forEach(m=>{if(A.pay[a.id]?.[m]?.pago)t+=tx;}));return t;}
+function totalDespPagas(){return A.desp.filter(d=>d.pago).reduce((s,d)=>s+(+d.valor||0),0);}
+function fmt(n){return(+n||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});}
+function today(){const d=new Date();return`${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;}
+function toISO(d){if(!d)return"";const [day,mon,yr]=d.split("/");return`${yr}-${mon}-${day}`;}
+function fromISO(d){if(!d)return"";const [yr,mon,day]=d.split("-");return`${day}/${mon}/${yr}`;}
+
+// ══════════════════════════════════════════════════════
+// ACTIONS
+// ══════════════════════════════════════════════════════
+function togglePay(aptId,mes){
+  const cur=A.pay[aptId]?.[mes]?.pago||false;
+  const tx=+A.cfg.taxaMensal||0;
+  const novoPay={...A.pay,[aptId]:{...A.pay[aptId],[mes]:{pago:!cur,data:!cur?today():""}}};
+  // Atualiza saldo: se pagando, soma; se desmarcando, subtrai
+  const novoSaldo=(+A.cfg.saldoCaixa||0)+(!cur?tx:-tx);
+  commit({pay:novoPay,cfg:{...A.cfg,saldoCaixa:novoSaldo}});
+  toast(!cur?"✅ Pago! Saldo atualizado.":"Pagamento desmarcado");
+}
+window.togglePay=togglePay;
+
+function pagarDesp(id){
+  const d=A.desp.find(d=>d.id===id);if(!d)return;
+  const novoSaldo=(+A.cfg.saldoCaixa||0)+(d.pago?+d.valor:-(+d.valor));
+  commit({desp:A.desp.map(x=>x.id===id?{...x,pago:!x.pago}:x),cfg:{...A.cfg,saldoCaixa:novoSaldo}});
+  toast(d.pago?"Despesa desmarcada. Saldo ajustado.":"💸 Despesa paga! Saldo atualizado.");
+}
+window.pagarDesp=pagarDesp;
+
+function delDesp(id){
+  const d=A.desp.find(d=>d.id===id);if(!d)return;
+  const novoSaldo=d.pago?(+A.cfg.saldoCaixa||0)+(+d.valor):+A.cfg.saldoCaixa||0;
+  commit({desp:A.desp.filter(d=>d.id!==id),cfg:{...A.cfg,saldoCaixa:novoSaldo}});
+  A.modal=null;toast("Despesa removida");
+}
+window.delDesp=delDesp;
+
+function logout(){commit({user:null,screen:"home"});}
+window.logout=logout;
+
+// ══════════════════════════════════════════════════════
+// RENDER
+// ══════════════════════════════════════════════════════
+function render(){
+  const root=document.getElementById("root");if(!root)return;
+  if(!A.user){root.innerHTML=loginHTML();bindLogin();return;}
+  root.innerHTML=`
+    ${toastHTML()}
+    ${backHTML()}
+    <div style="padding-bottom:72px">${pageHTML()}</div>
+    ${navHTML()}
+    ${modalHTML()}
+  `;
+  bindPage();
+}
+
+function toastHTML(){
+  if(!A.toast)return"";
+  return`<div style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:${A.toast.type==="err"?"#ef4444":"#1e293b"};color:#fff;border-radius:24px;padding:10px 22px;font-size:13px;font-weight:600;z-index:999;box-shadow:0 4px 20px rgba(0,0,0,.25);white-space:nowrap;pointer-events:none">${A.toast.msg}</div>`;
+}
+
+function backHTML(){
+  if(!["apt_d","mes_d"].includes(A.screen))return"";
+  const to=A.screen==="apt_d"?"apts":"meses";
+  return`<button onclick="nav('${to}')" style="position:fixed;top:14px;left:14px;z-index:80;background:rgba(255,255,255,.95);border:none;border-radius:20px;padding:7px 16px 7px 10px;font-size:14px;font-weight:700;color:#1e293b;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.12)">‹ Voltar</button>`;
+}
+
+function navHTML(){
+  const ac=A.screen==="apt_d"?"apts":A.screen==="mes_d"?"meses":A.screen;
+  return`<div style="position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:#fff;border-top:1.5px solid #e2e8f0;display:flex;z-index:70;padding-bottom:env(safe-area-inset-bottom,0)">
+    ${[["home","🏠","Início"],["apts","🚪","Apts"],["meses","📅","Meses"],["desp","💰","Gastos"],["cfg","⚙️","Config"]].map(([id,e,l])=>`
+    <button onclick="nav('${id}')" style="flex:1;background:none;border:none;padding:10px 2px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer">
+      <span style="font-size:20px">${e}</span>
+      <span style="font-size:10px;font-weight:${ac===id?700:500};color:${ac===id?"#2563eb":"#94a3b8"}">${l}</span>
+      ${ac===id?`<div style="width:4px;height:4px;background:#2563eb;border-radius:99px"></div>`:""}
+    </button>`).join("")}
+  </div>`;
+}
+
+function nav(screen,apt,mes){A.screen=screen;if(apt!==undefined)A.selApt=apt;if(mes!==undefined)A.selMes=mes;render();}
+window.nav=nav;
+
+function pageHTML(){
+  switch(A.screen){
+    case"home":return homeHTML();
+    case"apts":return aptsHTML();
+    case"apt_d":return aptDHTML();
+    case"meses":return mesesHTML();
+    case"mes_d":return mesDHTML();
+    case"desp":return despHTML();
+    case"cfg":return cfgHTML();
+    default:return homeHTML();
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// MODAL
+// ══════════════════════════════════════════════════════
+function modalHTML(){
+  if(!A.modal)return"";
+  const m=A.modal;
+  if(m.type==="confirm"){
+    return`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200;padding:24px" onclick="A.modal=null;render()">
+      <div style="background:#fff;border-radius:20px;padding:24px;width:100%;max-width:340px" onclick="event.stopPropagation()">
+        <div style="font-size:28px;text-align:center;margin-bottom:8px">${m.icon||"⚠️"}</div>
+        <div style="font-weight:800;font-size:16px;color:#1e293b;margin-bottom:8px;text-align:center">${m.title}</div>
+        <div style="color:#64748b;font-size:14px;margin-bottom:20px;text-align:center">${m.msg}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <button onclick="A.modal=null;render()" style="${B("#e2e8f0","#64748b")}">Cancelar</button>
+          <button onclick="${m.action}" style="${B(m.btnColor||"#ef4444")}">${m.btnLabel||"Confirmar"}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  if(m.type==="ajuste"){
+    return`<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200;padding:24px" onclick="A.modal=null;render()">
+      <div style="background:#fff;border-radius:20px;padding:24px;width:100%;max-width:340px" onclick="event.stopPropagation()">
+        <div style="font-size:28px;text-align:center;margin-bottom:8px">💰</div>
+        <div style="font-weight:800;font-size:16px;color:#1e293b;margin-bottom:4px;text-align:center">Ajustar Saldo em Caixa</div>
+        <div style="color:#64748b;font-size:13px;margin-bottom:16px;text-align:center">Saldo atual: <b>R$ ${fmt(A.cfg.saldoCaixa)}</b></div>
+        <label style="${L}">NOVO SALDO (R$)</label>
+        <input id="ajVal" type="number" min="0" step="0.01" style="${I}margin-bottom:16px" placeholder="0,00" value="${+A.cfg.saldoCaixa||0}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <button onclick="A.modal=null;render()" style="${B("#e2e8f0","#64748b")}">Cancelar</button>
+          <button id="ajSaveBtn" style="${B("#2563eb")}">Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  return"";
+}
+
+// ══════════════════════════════════════════════════════
+// LOGIN
+// ══════════════════════════════════════════════════════
+function loginHTML(){
+  return`<div style="min-height:100vh;background:linear-gradient(160deg,#0f172a,#1e3a5f,#2563eb);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px">
+    <div style="text-align:center;margin-bottom:36px">
+      <div style="width:72px;height:72px;background:rgba(255,255,255,.1);border-radius:22px;display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 14px;border:1.5px solid rgba(255,255,255,.2)">🏢</div>
+      <div style="color:rgba(255,255,255,.5);font-size:11px;font-weight:700;letter-spacing:2px;margin-bottom:4px">SISTEMA DE GESTÃO</div>
+      <div style="color:#fff;font-size:22px;font-weight:900">${A.cfg.nomeCondominio||"Condomínio"}</div>
+    </div>
+    <div style="background:#fff;border-radius:24px;padding:24px;width:100%;max-width:360px;box-shadow:0 24px 60px rgba(0,0,0,.35)">
+      <div style="font-size:17px;font-weight:800;color:#1e293b;margin-bottom:20px">Entrar no sistema</div>
+      <div style="margin-bottom:14px"><label style="${L}">USUÁRIO</label><input id="lu" style="${I}" placeholder="sindico ou subsindico" autocapitalize="none"></div>
+      <div style="margin-bottom:6px;position:relative"><label style="${L}">SENHA</label><input id="ls" type="password" style="${I}" placeholder="••••••"><button onclick="var x=document.getElementById('ls');x.type=x.type==='password'?'text':'password'" style="position:absolute;right:12px;top:30px;background:none;border:none;color:#94a3b8;cursor:pointer;font-size:18px">👁</button></div>
+      <div id="lerr" style="display:none;background:#fef2f2;color:#ef4444;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;margin-bottom:14px;margin-top:10px"></div>
+      <button id="lbtn" style="${B("#2563eb")}margin-top:10px">Entrar</button>
+      <div style="margin-top:16px;padding:12px 14px;background:#f8fafc;border-radius:12px;font-size:12px;color:#64748b">
+        <div style="font-weight:700;margin-bottom:4px">Acessos padrão:</div>
+        <div>👑 Síndico: <b>sindico / 1234</b></div>
+        <div>🔑 Subsíndico: <b>subsindico / 1234</b></div>
+      </div>
+    </div>
+  </div>`;
+}
+function bindLogin(){
+  const go=()=>{
+    const u=document.getElementById("lu")?.value?.trim()||"";
+    const s=document.getElementById("ls")?.value||"";
+    const found=A.users.find(x=>x.login===u&&x.senha===s);
+    if(found){commit({user:found});toast(`Bem-vindo, ${found.nome}! 👋`);}
+    else{const e=document.getElementById("lerr");if(e){e.style.display="block";e.textContent="⚠️ Login ou senha incorretos.";}}
+  };
+  document.getElementById("lbtn")?.addEventListener("click",go);
+  document.getElementById("ls")?.addEventListener("keydown",e=>{if(e.key==="Enter")go();});
+}
+
+// ══════════════════════════════════════════════════════
+// HOME
+// ══════════════════════════════════════════════════════
+function homeHTML(){
+  const ac=A.apts.filter(a=>a.ativo);
+  const arr=totalArr();
+  const tx=+A.cfg.taxaMensal||0;
+  const pot=ac.length*12*tx;
+  const pct=pot?Math.round(arr/pot*100):0;
+  const mi=new Date().getMonth();
+  const inadimp=ac.filter(a=>!A.pay[a.id]?.[MO[mi]]?.pago);
+  const saldo=+A.cfg.saldoCaixa||0;
+  const despPagas=totalDespPagas();
+
+  return`<div class="fade">
+  <!-- HEADER -->
+  <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:24px 20px 32px;border-radius:0 0 28px 28px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+      <div>
+        <div style="color:#93c5fd;font-size:11px;font-weight:700;letter-spacing:1.5px">CONDOMÍNIO</div>
+        <div style="color:#fff;font-size:18px;font-weight:900;line-height:1.2;margin-top:2px">${A.cfg.nomeCondominio||"— Configure o nome —"}</div>
+        <div style="color:#bfdbfe;font-size:12px;margin-top:3px">${A.cfg.endereco||"Sem endereço"} · ${A.cfg.ano}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="color:#fbbf24;font-size:10px;font-weight:700">${A.user.role==="sindico"?"👑 SÍNDICO":"🔑 SUBSÍNDICO"}</div>
+        <div style="color:#fff;font-size:12px;font-weight:600;margin-top:2px">${A.user.nome}</div>
+        <button onclick="logout()" style="margin-top:6px;background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">Sair 🚪</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+      ${[["APTS",ac.length,"#bfdbfe"],["INADIMP.",inadimp.length,"#fca5a5"],["ARREC.",pct+"%","#86efac"]].map(([l,v,c])=>`
+      <div style="background:rgba(255,255,255,.12);border-radius:14px;padding:10px 6px;text-align:center">
+        <div style="color:${c};font-size:19px;font-weight:900">${v}</div>
+        <div style="color:rgba(255,255,255,.6);font-size:9px;font-weight:700;margin-top:2px">${l}</div>
+      </div>`).join("")}
+    </div>
+    <div style="background:rgba(255,255,255,.1);border-radius:14px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+        <span style="color:rgba(255,255,255,.7);font-size:11px">Arrecadação anual</span>
+        <span style="color:#fff;font-weight:700;font-size:12px">R$ ${fmt(arr)} / R$ ${fmt(pot)}</span>
+      </div>
+      <div style="background:rgba(255,255,255,.15);border-radius:99px;height:7px">
+        <div style="background:${pct>80?"#22c55e":pct>50?"#eab308":"#ef4444"};width:${Math.min(pct,100)}%;height:7px;border-radius:99px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="padding:0 16px">
+    <!-- CAIXA -->
+    <div style="background:linear-gradient(135deg,#065f46,#10b981);border-radius:20px;padding:18px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="color:#a7f3d0;font-size:11px;font-weight:700;letter-spacing:1px">💰 SALDO EM CAIXA</div>
+          <div style="color:#fff;font-size:28px;font-weight:900;margin-top:4px">R$ ${fmt(saldo)}</div>
+          <div style="color:#d1fae5;font-size:12px;margin-top:4px">Entradas: R$ ${fmt(arr)} · Saídas: R$ ${fmt(despPagas)}</div>
+        </div>
+        <button onclick="A.modal={type:'ajuste'};render()" style="background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:12px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">✏️ Ajustar</button>
+      </div>
+    </div>
+
+    <!-- INADIMPLENTES -->
+    ${inadimp.length?`<div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:10px">⚠️ INADIMPLENTES EM ${MF[mi].toUpperCase()}</div>
+      ${inadimp.map(a=>`<div onclick="nav('apt_d',${JSON.stringify(a).replace(/"/g,"&quot;")})" style="${K("#fecaca","#fff5f5")}cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:700;color:#991b1b">Apt ${a.numero}${a.morador?` · ${a.morador}`:""}</div>
+          <div style="font-size:12px;color:#ef4444;margin-top:2px">${MF[mi]} pendente</div>
+        </div><span style="color:#ef4444;font-size:20px">›</span>
+      </div>`).join("")}
+    </div>`:""}
+
+    <!-- ACESSO RÁPIDO -->
+    <div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:10px">ACESSO RÁPIDO</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+      ${[["🚪","Apartamentos","apts","#eff6ff","#bfdbfe"],["📅","Por Mês","meses","#f0fdf4","#bbf7d0"],["💰","Despesas","desp","#fffbeb","#fde68a"],["⚙️","Configurações","cfg","#faf5ff","#e9d5ff"]].map(([e,l,s,bg,b])=>`
+      <button onclick="nav('${s}')" style="background:${bg};border:1.5px solid ${b};border-radius:16px;padding:16px 12px;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">${e}</span><span style="font-size:13px;font-weight:700;color:#1e293b">${l}</span>
+      </button>`).join("")}
+    </div>
+
+    <!-- SITUAÇÃO GERAL -->
+    <div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:10px">SITUAÇÃO GERAL</div>
+    ${ac.length===0?`<div style="text-align:center;color:#94a3b8;padding:24px;background:#fff;border-radius:16px">Nenhum apartamento. Configure em ⚙️.</div>`:""}
+    ${ac.map(a=>{const p=pctApt(a.id);return`<div onclick="nav('apt_d',${JSON.stringify(a).replace(/"/g,"&quot;")})" style="${K()}cursor:pointer">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div><span style="font-weight:800;color:#1e293b;font-size:15px">Apt ${a.numero}</span>
+        <span style="color:#64748b;font-size:13px;margin-left:8px">${a.morador||'<i style="color:#cbd5e1">Sem morador</i>'}</span></div>
+        <span style="${G(p===100?"#dcfce7":p>50?"#fef9c3":"#fee2e2",p===100?"#16a34a":p>50?"#92400e":"#dc2626")}">${p}%</span>
+      </div>
+      <div style="background:#f1f5f9;border-radius:99px;height:6px">
+        <div style="background:${p===100?"#22c55e":p>50?"#eab308":"#ef4444"};width:${p}%;height:6px;border-radius:99px"></div>
+      </div>
+    </div>`;}).join("")}
+  </div></div>`;
+}
+
+// ══════════════════════════════════════════════════════
+// APARTAMENTOS
+// ══════════════════════════════════════════════════════
+function aptsHTML(){
+  const ac=A.apts.filter(a=>a.ativo);
+  return`<div class="fade" style="padding:0 16px 20px">
+  <div style="padding-top:16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
+    <div><div style="font-size:18px;font-weight:800;color:#1e293b">Apartamentos</div><div style="font-size:12px;color:#64748b">${ac.length} unidades</div></div>
+    <button id="togApt" style="background:#2563eb;color:#fff;border:none;border-radius:12px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer">＋ Novo</button>
+  </div>
+  <div id="frmApt" style="display:none;${K("#bfdbfe","#eff6ff")}margin-bottom:16px">
+    <div style="font-weight:700;font-size:14px;color:#1e293b;margin-bottom:12px">Novo Apartamento</div>
+    <div style="margin-bottom:10px"><label style="${L}">NÚMERO *</label><input id="an" style="${I}" placeholder="Ex: 201"></div>
+    <div style="margin-bottom:10px"><label style="${L}">MORADOR</label><input id="am" style="${I}" placeholder="Nome completo"></div>
+    <div style="margin-bottom:10px"><label style="${L}">TELEFONE</label><input id="at" style="${I}" placeholder="(11) 99999-9999"></div>
+    <div style="margin-bottom:10px"><label style="${L}">E-MAIL</label><input id="ae" style="${I}" placeholder="email@exemplo.com"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
+      <button id="cnclApt" style="${B("#e2e8f0","#64748b")}">Cancelar</button>
+      <button id="svApt" style="${B("#2563eb")}">Adicionar</button>
+    </div>
+  </div>
+  ${ac.length===0?`<div style="text-align:center;color:#94a3b8;padding:32px;background:#fff;border-radius:16px"><div style="font-size:36px;margin-bottom:8px">🚪</div><div style="font-weight:600">Nenhum apartamento</div></div>`:""}
+  ${ac.map(a=>{const p=pctApt(a.id);return`<div onclick="nav('apt_d',${JSON.stringify(a).replace(/"/g,"&quot;")})" style="${K()}cursor:pointer">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="width:50px;height:50px;background:${p===100?"#dcfce7":p>0?"#fef9c3":"#f1f5f9"};border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0">
+        <div style="font-size:9px;color:#64748b;font-weight:600">APT</div>
+        <div style="font-size:17px;font-weight:900;color:#1e293b">${a.numero}</div>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;color:#1e293b;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.morador||'<span style="color:#cbd5e1;font-style:italic">Sem morador</span>'}</div>
+        ${a.telefone?`<div style="font-size:12px;color:#64748b;margin-top:1px">${a.telefone}</div>`:""}
+        <div style="background:#f1f5f9;border-radius:99px;height:5px;margin-top:6px">
+          <div style="background:${p===100?"#22c55e":p>50?"#eab308":"#ef4444"};width:${p}%;height:5px;border-radius:99px"></div>
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-weight:800;color:${p===100?"#16a34a":"#ef4444"};font-size:15px">${p}%</div>
+        <div style="color:#94a3b8;font-size:18px">›</div>
+      </div>
+    </div>
+  </div>`;}).join("")}
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════
+// APT DETALHE
+// ══════════════════════════════════════════════════════
+function aptDHTML(){
+  const a=A.selApt;if(!a)return"";
+  const tx=+A.cfg.taxaMensal||50;
+  const totalPago=MO.filter(m=>A.pay[a.id]?.[m]?.pago).length*tx;
+  return`<div class="fade" style="padding-top:60px">
+  <div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:16px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px">
+    <div style="color:#93c5fd;font-size:11px;font-weight:700">APARTAMENTO</div>
+    <div style="color:#fff;font-size:24px;font-weight:900">Apt ${a.numero}</div>
+    <div style="color:#bfdbfe;font-size:13px">${a.morador||"Sem morador"}</div>
+    ${a.telefone?`<div style="color:#93c5fd;font-size:12px;margin-top:2px">📞 ${a.telefone}</div>`:""}
+    <div style="color:#86efac;font-size:13px;margin-top:6px;font-weight:700">Pago no ano: R$ ${fmt(totalPago)}</div>
+  </div>
+  <div style="padding:0 16px">
+    ${MO.map((mes,i)=>{
+      const p=A.pay[a.id]?.[mes]||{pago:false,data:""};
+      return`<div style="${K(p.pago?"#bbf7d0":"#e2e8f0",p.pago?"#f0fdf4":"#fff")}">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:800;color:#1e293b;font-size:15px">${MF[i]}</div>
+            ${p.data?`<div style="font-size:11px;color:#64748b;margin-top:2px">Pago em ${p.data}</div>`:""}
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="text-align:right">
+              <div style="font-weight:700;color:#1e293b">R$ ${fmt(tx)}</div>
+              <div style="font-size:10px;color:#64748b">taxa mensal</div>
+            </div>
+            <button onclick="togglePay('${a.id}','${mes}')" style="background:${p.pago?"#22c55e":"#f1f5f9"};border:none;border-radius:12px;padding:10px 14px;cursor:pointer;font-size:20px;line-height:1">${p.pago?"✅":"⬜"}</button>
+          </div>
+        </div>
+      </div>`;
+    }).join("")}
+  </div></div>`;
+}
+
+// ══════════════════════════════════════════════════════
+// MESES
+// ══════════════════════════════════════════════════════
+function mesesHTML(){
+  return`<div class="fade" style="padding:0 16px 20px">
+  <div style="padding-top:16px;margin-bottom:16px">
+    <div style="font-size:18px;font-weight:800;color:#1e293b">Por Mês</div>
+    <div style="font-size:12px;color:#64748b">Janeiro a Dezembro</div>
+  </div>
+  ${MO.map((mes,i)=>{const p=pctMes(mes);return`<div onclick="nav('mes_d',null,${i})" style="${K()}cursor:pointer">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-weight:800;font-size:16px;color:#1e293b">${MF[i]}</div>
+      <span style="${G(p===100?"#dcfce7":p>50?"#fef9c3":"#fee2e2",p===100?"#16a34a":p>50?"#92400e":"#dc2626")}">${p}%</span>
+    </div>
+    <div style="background:#f1f5f9;border-radius:99px;height:8px">
+      <div style="background:${p===100?"#22c55e":p>50?"#eab308":"#ef4444"};width:${p}%;height:8px;border-radius:99px"></div>
+    </div>
+  </div>`;}).join("")}
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════
+// MES DETALHE
+// ══════════════════════════════════════════════════════
+function mesDHTML(){
+  const i=A.selMes;const mes=MO[i];
+  const ac=A.apts.filter(a=>a.ativo);
+  const tx=+A.cfg.taxaMensal||50;
+  const pagos=ac.filter(a=>A.pay[a.id]?.[mes]?.pago);
+  return`<div class="fade" style="padding-top:60px">
+  <div style="background:linear-gradient(135deg,#065f46,#10b981);padding:16px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px">
+    <div style="color:#a7f3d0;font-size:11px;font-weight:700">MÊS</div>
+    <div style="color:#fff;font-size:24px;font-weight:900">${MF[i]}</div>
+    <div style="color:#d1fae5;font-size:13px">${pagos.length}/${ac.length} pagos · R$ ${fmt(pagos.length*tx)} arrecadado</div>
+  </div>
+  <div style="padding:0 16px">
+    ${ac.map(a=>{const p=A.pay[a.id]?.[mes]||{pago:false,data:""};return`<div style="${K(p.pago?"#bbf7d0":"#e2e8f0",p.pago?"#f0fdf4":"#fff")}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:800;color:#1e293b">Apt ${a.numero}</div>
+          <div style="font-size:12px;color:#64748b">${a.morador||"Sem morador"}</div>
+          ${p.data?`<div style="font-size:11px;color:#64748b;margin-top:1px">Pago em ${p.data}</div>`:""}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="text-align:right">
+            <div style="font-weight:700;color:#1e293b">R$ ${fmt(tx)}</div>
+            <span style="${G(p.pago?"#dcfce7":"#fee2e2",p.pago?"#16a34a":"#dc2626")}">${p.pago?"✓ Pago":"Pendente"}</span>
+          </div>
+          <button onclick="togglePay('${a.id}','${mes}')" style="background:${p.pago?"#22c55e":"#f1f5f9"};border:none;border-radius:12px;padding:10px 14px;cursor:pointer;font-size:20px">${p.pago?"✅":"⬜"}</button>
+        </div>
+      </div>
+    </div>`;}).join("")}
+  </div></div>`;
+}
+
+// ══════════════════════════════════════════════════════
+// DESPESAS
+// ══════════════════════════════════════════════════════
+let dFilt="Todos",dShow=false,dEditId=null,dForm={desc:"",valor:"",data:today(),cat:"luz",obs:""};
+
+function despHTML(){
+  const fil=dFilt==="Todos"?A.desp:A.desp.filter(d=>d.mes===dFilt);
+  const tot=fil.reduce((s,d)=>s+(+d.valor||0),0);
+  const pago=fil.filter(d=>d.pago).reduce((s,d)=>s+(+d.valor||0),0);
+  const pend=tot-pago;
+  return`<div class="fade" style="padding:0 0 20px">
+  <div style="background:linear-gradient(135deg,#78350f,#f59e0b);padding:20px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px">
+    <div style="color:#fde68a;font-size:11px;font-weight:700;letter-spacing:1px">DESPESAS</div>
+    <div style="color:#fff;font-size:20px;font-weight:900;margin-bottom:12px">Gastos do Condomínio</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      ${[["TOTAL",tot,"#fde68a"],["PAGO",pago,"#86efac"],["PENDENTE",pend,"#fca5a5"]].map(([l,v,c])=>`
+      <div style="background:rgba(255,255,255,.13);border-radius:12px;padding:10px 6px;text-align:center">
+        <div style="color:${c};font-size:9px;font-weight:700">${l}</div>
+        <div style="color:#fff;font-weight:800;font-size:12px;margin-top:2px">R$ ${fmt(v)}</div>
+      </div>`).join("")}
+    </div>
+  </div>
+
+  <div style="padding:0 16px">
+    <!-- FILTROS -->
+    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:10px">
+      ${["Todos",...MO].map(m=>`<button onclick="dFilt='${m}';render()" style="background:${dFilt===m?"#f59e0b":"#f1f5f9"};color:${dFilt===m?"#fff":"#374151"};border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">${m}</button>`).join("")}
+    </div>
+
+    <button id="togDesp" style="${B("#f59e0b")}margin-bottom:12px">${dShow?"✕ Fechar":"＋ Nova Despesa"}</button>
+
+    ${dShow?`<div style="${K("#fde68a","#fffbeb")}margin-bottom:14px">
+      <div style="font-weight:800;color:#1e293b;font-size:15px;margin-bottom:14px">${dEditId?"✏️ Editar":"➕ Nova"} Despesa</div>
+
+      <div style="margin-bottom:12px"><label style="${L}">DESCRIÇÃO *</label>
+        <input id="dd" style="${I}" placeholder="Ex: Conta de luz de Janeiro" value="${dForm.desc}"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div><label style="${L}">VALOR (R$) *</label>
+          <input id="dv" type="number" min="0" step="0.01" style="${I}" placeholder="0,00" value="${dForm.valor}"></div>
+        <div><label style="${L}">DATA</label>
+          <input id="ddt" type="date" style="${I}" value="${toISO(dForm.data)||toISO(today())}"></div>
+      </div>
+
+      <div style="margin-bottom:12px"><label style="${L}">CATEGORIA / SERVIÇO</label>
+        <select id="dc" style="${I}padding:12px 28px 12px 14px;">
+          ${Object.entries(CAT_DESP).map(([k,v])=>`<option value="${k}"${dForm.cat===k?" selected":""}>${v}</option>`).join("")}
+        </select>
+      </div>
+
+      <div style="margin-bottom:14px"><label style="${L}">OBSERVAÇÕES (opcional)</label>
+        <input id="dob" style="${I}" placeholder="Ex: Nº da nota fiscal, fornecedor..." value="${dForm.obs||""}"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button id="dCancBtn" style="${B("#e2e8f0","#64748b")}">Cancelar</button>
+        <button id="dSaveBtn" style="${B("#f59e0b")}">${dEditId?"Salvar":"Adicionar"}</button>
+      </div>
+    </div>`:""}
+
+    ${fil.length===0?`<div style="text-align:center;color:#94a3b8;padding:32px;background:#fff;border-radius:16px">
+      <div style="font-size:32px;margin-bottom:8px">💰</div>
+      <div>Nenhuma despesa${dFilt!=="Todos"?" em "+dFilt:""}.</div>
+    </div>`:""}
+
+    ${fil.map(d=>{
+      const cc=CAT_COLOR[d.cat]||"#94a3b8";
+      return`<div style="${K()}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div style="flex:1;margin-right:10px">
+            <div style="font-weight:700;color:#1e293b;font-size:14px">${d.desc}</div>
+            <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">
+              <span style="${G(cc+"22",cc)}">${CAT_DESP[d.cat]||d.cat}</span>
+              <span style="${G("#f1f5f9","#64748b")}">${d.mes}</span>
+              ${d.data?`<span style="${G("#f1f5f9","#64748b")}">📅 ${d.data}</span>`:""}
+            </div>
+            ${d.obs?`<div style="font-size:12px;color:#94a3b8;margin-top:6px">📝 ${d.obs}</div>`:""}
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-weight:800;color:#1e293b;font-size:15px">R$ ${fmt(d.valor)}</div>
+            <button onclick="pagarDesp(${d.id})" style="margin-top:6px;background:${d.pago?"#dcfce7":"#fee2e2"};color:${d.pago?"#16a34a":"#dc2626"};border:none;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">${d.pago?"✓ Pago":"Pendente"}</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="editDesp(${d.id})" style="flex:1;background:#f1f5f9;color:#374151;border:none;border-radius:10px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">✏️ Editar</button>
+          <button onclick="A.modal={type:'confirm',icon:'🗑',title:'Excluir despesa?',msg:'Esta ação não pode ser desfeita.',action:'delDesp('+${d.id}+')',btnColor:'#ef4444',btnLabel:'Excluir'};render()" style="flex:1;background:#fef2f2;color:#ef4444;border:none;border-radius:10px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">🗑 Excluir</button>
+        </div>
+      </div>`;
+    }).join("")}
+  </div></div>`;
+}
+
+window.editDesp=function(id){
+  const d=A.desp.find(d=>d.id===id);if(!d)return;
+  dEditId=id;dForm={desc:d.desc,valor:String(d.valor),data:d.data||today(),cat:d.cat,obs:d.obs||""};
+  dShow=true;render();
+  setTimeout(()=>document.getElementById("dd")?.scrollIntoView({behavior:"smooth"}),100);
+};
+
+// ══════════════════════════════════════════════════════
+// CONFIG
+// ══════════════════════════════════════════════════════
+let cTab="geral",cEditApt=null,cEditUser=null,cLocal={...A.cfg};
+
+function cfgHTML(){
+  cLocal={...A.cfg,...cLocal};
+  const TABS=[["geral","⚙️ Geral"],["taxas","💲 Taxa"],["apts","🚪 Apts"],["usuarios","👤 Usuários"],["dados","🗂 Dados"]];
+  return`<div class="fade" style="padding:0 0 20px">
+  <div style="background:linear-gradient(135deg,#1e293b,#334155);padding:20px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px">
+    <div style="color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:1px">CONFIGURAÇÕES</div>
+    <div style="color:#fff;font-size:20px;font-weight:900">Sistema</div>
+  </div>
+  <div style="display:flex;gap:6px;overflow-x:auto;padding:0 16px 12px">
+    ${TABS.map(([id,l])=>`<button onclick="cTab='${id}';render()" style="background:${cTab===id?"#1e293b":"#f1f5f9"};color:${cTab===id?"#fff":"#374151"};border:none;border-radius:20px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">${l}</button>`).join("")}
+  </div>
+  <div style="padding:0 16px">
+
+  ${cTab==="geral"?`
+    <div style="margin-bottom:14px"><label style="${L}">NOME DO CONDOMÍNIO</label><input id="cn" style="${I}" value="${cLocal.nomeCondominio||""}" placeholder="Ex: Residencial das Flores"></div>
+    <div style="margin-bottom:14px"><label style="${L}">ENDEREÇO</label><input id="ce" style="${I}" value="${cLocal.endereco||""}" placeholder="Ex: Rua das Acácias, 123"></div>
+    <div style="margin-bottom:14px"><label style="${L}">ANO DE REFERÊNCIA</label><input id="ca" type="number" style="${I}" value="${cLocal.ano||new Date().getFullYear()}"></div>
+    <button id="svCfg" style="${B("#1e293b")}">Salvar Configurações</button>`:""}
+
+  ${cTab==="taxas"?`
+    <div style="${K("#bfdbfe","#eff6ff")}margin-bottom:16px"><div style="font-size:13px;font-weight:600;color:#1e3a5f">💡 Taxa mensal cobrada de cada apartamento. O valor pago é somado automaticamente ao saldo em caixa.</div></div>
+    <div style="margin-bottom:14px"><label style="${L}">TAXA MENSAL POR APARTAMENTO (R$)</label><input id="ct" type="number" min="0" step="0.01" style="${I}" value="${cLocal.taxaMensal||50}"></div>
+    <div style="${K("#bbf7d0","#f0fdf4")}margin-bottom:16px">
+      <div style="color:#64748b;font-size:12px">Por apartamento/mês:</div>
+      <div style="font-weight:900;font-size:28px;color:#16a34a">R$ ${fmt(cLocal.taxaMensal||50)}</div>
+      <div style="color:#64748b;font-size:12px;margin-top:4px">Potencial anual (${A.apts.filter(a=>a.ativo).length} apts): <b>R$ ${fmt((+cLocal.taxaMensal||50)*A.apts.filter(a=>a.ativo).length*12)}</b></div>
+    </div>
+    <div style="${K("#fffbeb","#fffbeb")}margin-bottom:16px">
+      <div style="font-weight:700;color:#78350f;margin-bottom:8px;font-size:13px">DESTINAÇÃO DA TAXA</div>
+      ${[["⚡","Conta de Luz"],["💧","Conta de Água"],["🔧","Manutenções"]].map(([e,l])=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span>${e}</span><span style="font-size:13px;color:#92400e">${l}</span></div>`).join("")}
+    </div>
+    <button id="svTaxa" style="${B("#16a34a")}">Salvar Taxa</button>`:""}
+
+  ${cTab==="apts"?cEditApt?`
+    <div style="${K("#bfdbfe","#eff6ff")}">
+      <div style="font-weight:700;color:#1e293b;margin-bottom:12px">Editando Apt ${cEditApt.numero}</div>
+      <div style="margin-bottom:10px"><label style="${L}">NÚMERO</label><input id="ean" style="${I}" value="${cEditApt.numero}"></div>
+      <div style="margin-bottom:10px"><label style="${L}">MORADOR</label><input id="eam" style="${I}" value="${cEditApt.morador||""}"></div>
+      <div style="margin-bottom:10px"><label style="${L}">TELEFONE</label><input id="eat" style="${I}" value="${cEditApt.telefone||""}"></div>
+      <div style="margin-bottom:10px"><label style="${L}">E-MAIL</label><input id="eae" style="${I}" value="${cEditApt.email||""}"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px">
+        <button onclick="cEditApt=null;render()" style="${B("#e2e8f0","#64748b")}">Cancelar</button>
+        <button id="svAptCfg" style="${B("#2563eb")}">Salvar</button>
+      </div>
+    </div>`:`
+    ${A.apts.filter(a=>a.ativo).map(a=>`<div style="${K()}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-weight:800;color:#1e293b;font-size:15px">Apt ${a.numero}</div>
+          <div style="font-size:13px;color:${a.morador?"#374151":"#cbd5e1"};font-style:${a.morador?"normal":"italic"}">${a.morador||"Sem morador"}</div>
+          ${a.telefone?`<div style="font-size:12px;color:#64748b">${a.telefone}</div>`:""}
+          ${a.email?`<div style="font-size:12px;color:#64748b">${a.email}</div>`:""}
+        </div>
+        <div style="display:flex;gap:6px">
+          <button onclick="cEditApt=${JSON.stringify(a).replace(/"/g,"&quot;")};render()" style="background:#eff6ff;color:#2563eb;border:none;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">✏️</button>
+          <button onclick="A.modal={type:'confirm',icon:'🗑',title:'Remover Apt ${a.numero}?',msg:'Os pagamentos deste apartamento também serão removidos.',action:'rmApt(\'${a.id}\')',btnColor:'#ef4444',btnLabel:'Remover'};render()" style="background:#fef2f2;color:#ef4444;border:none;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">🗑</button>
+        </div>
+      </div>
+    </div>`).join("")}
+    ${A.apts.filter(a=>a.ativo).length===0?`<div style="text-align:center;color:#94a3b8;padding:24px">Nenhum apartamento.</div>`:""}`:""}
+
+  ${cTab==="usuarios"?cEditUser?`
+    <div style="${K("#ddd6fe","#faf5ff")}">
+      <div style="font-weight:700;color:#1e293b;margin-bottom:12px">Editando: ${cEditUser.nome}</div>
+      <div style="margin-bottom:10px"><label style="${L}">NOME</label><input id="eun" style="${I}" value="${cEditUser.nome}"></div>
+      <div style="margin-bottom:10px"><label style="${L}">LOGIN</label><input id="eul" style="${I}" value="${cEditUser.login}" autocapitalize="none"></div>
+      <div style="margin-bottom:10px"><label style="${L}">SENHA</label><input id="eus" type="password" style="${I}" value="${cEditUser.senha}"></div>
+      <div style="margin-bottom:14px"><label style="${L}">FUNÇÃO</label>
+        <select id="eur" style="${I}padding:12px 28px 12px 14px;">
+          <option value="sindico"${cEditUser.role==="sindico"?" selected":""}>👑 Síndico</option>
+          <option value="subsindico"${cEditUser.role==="subsindico"?" selected":""}>🔑 Subsíndico</option>
+        </select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button onclick="cEditUser=null;render()" style="${B("#e2e8f0","#64748b")}">Cancelar</button>
+        <button id="svUser" style="${B("#7c3aed")}">Salvar</button>
+      </div>
+    </div>`:`
+    ${A.users.map(u=>`<div style="${K()}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:800;color:#1e293b">${u.nome}</div>
+          <div style="font-size:12px;color:#64748b">Login: <b>${u.login}</b> · ${u.role==="sindico"?"👑 Síndico":"🔑 Subsíndico"}</div>
+        </div>
+        <button onclick="cEditUser=${JSON.stringify(u).replace(/"/g,"&quot;")};render()" style="background:#eff6ff;color:#2563eb;border:none;border-radius:10px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">✏️</button>
+      </div>
+    </div>`).join("")}`:""}
+
+  ${cTab==="dados"?`
+    <div style="${K("#bbf7d0","#f0fdf4")}margin-bottom:12px">
+      <div style="font-weight:700;color:#065f46;margin-bottom:4px">✅ Salvamento automático</div>
+      <div style="font-size:13px;color:#047857">Todos os dados são salvos automaticamente a cada alteração.</div>
+    </div>
+    <div style="${K()}margin-bottom:12px">
+      <div style="font-weight:700;color:#1e293b;margin-bottom:4px">🚪 Sair do sistema</div>
+      <div style="font-size:13px;color:#64748b;margin-bottom:12px">Encerra a sessão atual.</div>
+      <button onclick="logout()" style="${B("#475569")}">Sair do Sistema</button>
+    </div>
+    <div style="${K("#fecaca","#fff5f5")}">
+      <div style="font-weight:700;color:#991b1b;margin-bottom:4px">⚠️ Zerar Pagamentos e Despesas</div>
+      <div style="font-size:13px;color:#7f1d1d;margin-bottom:12px">Remove todos os pagamentos e despesas. Saldo volta a zero.</div>
+      <button onclick="A.modal={type:'confirm',icon:'⚠️',title:'Zerar todos os dados?',msg:'Pagamentos, despesas e saldo serão apagados.',action:'doReset()',btnColor:'#ef4444',btnLabel:'Zerar tudo'};render()" style="${B("#ef4444")}">Zerar Dados</button>
+    </div>`:""}
+
+  </div></div>`;
+}
+
+window.rmApt=function(id){
+  const np={...A.pay};delete np[id];
+  commit({apts:A.apts.filter(a=>a.id!==id),pay:np});
+  A.modal=null;toast("Apartamento removido");
+};
+window.doReset=function(){
+  commit({pay:mkPay(A.apts),desp:[],cfg:{...A.cfg,saldoCaixa:0}});
+  A.modal=null;toast("Dados zerados!");
+};
+
+// ══════════════════════════════════════════════════════
+// BIND EVENTS
+// ══════════════════════════════════════════════════════
+function bindPage(){
+  // Modal ajuste saldo
+  document.getElementById("ajSaveBtn")?.addEventListener("click",()=>{
+    const v=parseFloat(document.getElementById("ajVal")?.value)||0;
+    commit({cfg:{...A.cfg,saldoCaixa:v}});
+    A.modal=null;toast("✓ Saldo atualizado!");
+  });
+
+  // Add apt
+  document.getElementById("togApt")?.addEventListener("click",()=>{
+    const f=document.getElementById("frmApt");if(f)f.style.display=f.style.display==="none"?"block":"none";
+  });
+  document.getElementById("cnclApt")?.addEventListener("click",()=>{
+    const f=document.getElementById("frmApt");if(f)f.style.display="none";
+  });
+  document.getElementById("svApt")?.addEventListener("click",()=>{
+    const n=(document.getElementById("an")?.value||"").trim();
+    if(!n){toast("Informe o número","err");return;}
+    if(A.apts.find(a=>a.id===n)){toast("Apartamento já existe","err");return;}
+    const novo={id:n,numero:n,morador:document.getElementById("am")?.value||"",telefone:document.getElementById("at")?.value||"",email:document.getElementById("ae")?.value||"",ativo:true};
+    const np={...A.pay,[n]:{}};MO.forEach(m=>{np[n][m]={pago:false,data:""};});
+    commit({apts:[...A.apts,novo],pay:np});toast(`Apt ${n} adicionado!`);
+  });
+
+  // Despesas
+  document.getElementById("togDesp")?.addEventListener("click",()=>{
+    if(dShow&&!dEditId){dShow=false;}else{dShow=true;dEditId=null;dForm={desc:"",valor:"",data:today(),cat:"luz",obs:""};}render();
+  });
+  document.getElementById("dCancBtn")?.addEventListener("click",()=>{dShow=false;dEditId=null;render();});
+  document.getElementById("dSaveBtn")?.addEventListener("click",()=>{
+    const desc=(document.getElementById("dd")?.value||"").trim();
+    const val=document.getElementById("dv")?.value||"";
+    if(!desc||!val){toast("Preencha descrição e valor","err");return;}
+    const dt=fromISO(document.getElementById("ddt")?.value||"");
+    const mes=dt?MO[parseInt((document.getElementById("ddt")?.value||"").split("-")[1])-1]||MO[new Date().getMonth()]:MO[new Date().getMonth()];
+    const f={desc,valor:parseFloat(val),data:dt||today(),mes,cat:document.getElementById("dc")?.value||"luz",obs:document.getElementById("dob")?.value||""};
+    if(dEditId){
+      const old=A.desp.find(d=>d.id===dEditId);
+      // Se estava pago e valor mudou, ajusta saldo
+      let saldo=+A.cfg.saldoCaixa||0;
+      if(old?.pago){saldo+=old.valor;saldo-=f.valor;}
+      commit({desp:A.desp.map(d=>d.id===dEditId?{...d,...f}:d),cfg:{...A.cfg,saldoCaixa:saldo}});
+      toast("✓ Despesa atualizada!");
+    }else{
+      commit({desp:[{...f,id:Date.now(),pago:false},...A.desp]});
+      toast("Despesa adicionada!");
+    }
+    dShow=false;dEditId=null;render();
+  });
+
+  // Config
+  document.getElementById("svCfg")?.addEventListener("click",()=>{
+    cLocal={...cLocal,nomeCondominio:document.getElementById("cn")?.value||"",endereco:document.getElementById("ce")?.value||"",ano:document.getElementById("ca")?.value||new Date().getFullYear()};
+    commit({cfg:{...A.cfg,...cLocal}});toast("✓ Configurações salvas!");
+  });
+  document.getElementById("svTaxa")?.addEventListener("click",()=>{
+    cLocal.taxaMensal=parseFloat(document.getElementById("ct")?.value)||50;
+    commit({cfg:{...A.cfg,...cLocal}});toast("✓ Taxa salva!");
+  });
+  document.getElementById("svAptCfg")?.addEventListener("click",()=>{
+    const a={...cEditApt,numero:document.getElementById("ean")?.value||cEditApt.numero,morador:document.getElementById("eam")?.value||"",telefone:document.getElementById("eat")?.value||"",email:document.getElementById("eae")?.value||""};
+    commit({apts:A.apts.map(x=>x.id===a.id?a:x)});cEditApt=null;toast("✓ Apartamento salvo!");
+  });
+  document.getElementById("svUser")?.addEventListener("click",()=>{
+    const u={...cEditUser,nome:document.getElementById("eun")?.value||cEditUser.nome,login:document.getElementById("eul")?.value||cEditUser.login,senha:document.getElementById("eus")?.value||cEditUser.senha,role:document.getElementById("eur")?.value||cEditUser.role};
+    if(!u.nome||!u.login||!u.senha){toast("Preencha todos os campos","err");return;}
+    const newU=A.users.map(x=>x.id===u.id?u:x);
+    const curUser=A.user?.id===u.id?u:A.user;
+    commit({users:newU,user:curUser});cEditUser=null;toast("✓ Usuário salvo!");
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// START
+// ══════════════════════════════════════════════════════
+render();
+</script>
+</body>
+</html>
