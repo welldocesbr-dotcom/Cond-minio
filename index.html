@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>CondoGest Pro</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f0f4f8;min-height:100vh}
+input,select,button,textarea{font-family:inherit;font-size:14px}
+select{appearance:none;-webkit-appearance:none}
+textarea{resize:none}
+.fade{animation:fade .15s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+</style>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<div id="app" style="max-width:430px;margin:0 auto;min-height:100vh">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:14px">
+    <div style="font-size:48px">🏢</div>
+    <div style="color:#64748b;font-weight:600;font-size:16px">Conectando...</div>
+  </div>
+</div>
+<script>
+firebase.initializeApp({
+  apiKey:"AIzaSyDKqdGqPDHpbeOjChWjxg453g9xUNo_bZE",
+  authDomain:"cond-ce038.firebaseapp.com",
+  databaseURL:"https://cond-ce038-default-rtdb.firebaseio.com",
+  projectId:"cond-ce038",
+  storageBucket:"cond-ce038.firebasestorage.app",
+  messagingSenderId:"797254652697",
+  appId:"1:797254652697:web:9e790186009dbda2c02b88"
+});
+var db=firebase.database();
+function fbSet(p,v){return db.ref(p).set(v);}
+function fbUpd(p,v){return db.ref(p).update(v);}
+function fbDel(p){return db.ref(p).remove();}
+function fbOn(p,cb){db.ref(p).on("value",function(s){cb(s.val());});}
+function fbGet(p){return db.ref(p).once("value");}
+
+var ANO_ATUAL=new Date().getFullYear();
+var MO=["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+var MF=["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+var CATS={luz:"⚡ Luz",agua:"💧 Água",manutencao:"🔧 Manutenção",limpeza:"🧹 Limpeza",seguranca:"🔒 Segurança",outros:"📦 Outros"};
+var CATC={luz:"#eab308",agua:"#06b6d4",manutencao:"#10b981",limpeza:"#3b82f6",seguranca:"#8b5cf6",outros:"#94a3b8"};
+
+var ST={
+  tela:"home",user:null,users:[],
+  cfg:{nomeCondominio:"",endereco:"",ano:ANO_ATUAL,taxaMensal:50,saldoCaixa:0,blocos:false},
+  blocos:[],apts:[],pay:{},desp:[],avisos:[],
+  loading:true,toast:null,modal:null,
+  aptForm:null,despForm:null,despEditId:null,
+  avisoForm:null,
+  cfgTab:"geral",aptEditId:null,userEditId:null,blocoEditId:null,
+  selAptId:null,selMes:null,selAno:ANO_ATUAL,
+  despFiltro:"Todos",avisoFiltro:"todos"
+};
+
+// ── HELPERS ───────────────────────────────────────────
+function fmt(n){return(+n||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});}
+function hoje(){var d=new Date();return pad(d.getDate())+"/"+pad(d.getMonth()+1)+"/"+d.getFullYear();}
+function pad(n){return n<10?"0"+n:String(n);}
+function isoToBr(s){if(!s)return"";var p=s.split("-");return p[2]+"/"+p[1]+"/"+p[0];}
+function brToIso(s){if(!s)return"";var p=s.split("/");return p[2]+"-"+p[1]+"-"+p[0];}
+function mesDoIso(s){if(!s)return MO[new Date().getMonth()];return MO[parseInt(s.split("-")[1])-1]||MO[new Date().getMonth()];}
+function gval(id){var el=document.getElementById(id);return el?el.value:"";}
+function aptById(id){return ST.apts.find(function(a){return a.id===id;})||null;}
+function userById(id){return ST.users.find(function(u){return u.id===id;})||null;}
+function blocoById(id){return ST.blocos.find(function(b){return b.id===id;})||null;}
+function nomeBloco(id){var b=blocoById(id);return b?b.nome:"";}
+
+function pctApt(id,ano){
+  var a=ano||ST.selAno;
+  var p=0;MO.forEach(function(m){if(ST.pay[a]&&ST.pay[a][id]&&ST.pay[a][id][m]&&ST.pay[a][id][m].pago)p++;});
+  return Math.round(p/12*100);
+}
+function pctMes(m,ano){
+  var a=ano||ST.selAno;
+  var ac=ST.apts;if(!ac.length)return 0;
+  return Math.round(ac.filter(function(x){return ST.pay[a]&&ST.pay[a][x.id]&&ST.pay[a][x.id][m]&&ST.pay[a][x.id][m].pago;}).length/ac.length*100);
+}
+function totalArr(ano){
+  var a=ano||ST.selAno;var t=0;var tx=+ST.cfg.taxaMensal||0;
+  ST.apts.forEach(function(x){MO.forEach(function(m){if(ST.pay[a]&&ST.pay[a][x.id]&&ST.pay[a][x.id][m]&&ST.pay[a][x.id][m].pago)t+=tx;});});
+  return t;
+}
+function totalDespPagas(){return ST.desp.filter(function(d){return d.pago&&String(d.ano||ANO_ATUAL)===String(ST.selAno);}).reduce(function(s,d){return s+(+d.valor||0);},0);}
+
+// ── TOAST ─────────────────────────────────────────────
+var _tt;
+function toast(msg,tipo){clearTimeout(_tt);ST.toast={msg:msg,tipo:tipo||"ok"};pintar();_tt=setTimeout(function(){ST.toast=null;pintar();},2500);}
+
+// ── CSS ───────────────────────────────────────────────
+function I(extra){return"width:100%;border:1.5px solid #e2e8f0;border-radius:12px;padding:12px 14px;font-size:14px;background:#fff;color:#1e293b;box-sizing:border-box;"+(extra||"");}
+function BTN(bg,c,w){return"background:"+(bg||"#2563eb")+";color:"+(c||"#fff")+";border:none;border-radius:13px;padding:13px 18px;font-size:14px;font-weight:700;cursor:pointer;width:"+(w||"100%")+";";}
+function CARD(b,bg){return"background:"+(bg||"#fff")+";border:1.5px solid "+(b||"#e2e8f0")+";border-radius:16px;padding:14px;margin-bottom:10px;";}
+function LBL(){return"font-size:11px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:5px;display:block;";}
+function BADGE(bg,c){return"background:"+bg+";color:"+c+";font-size:10px;font-weight:700;border-radius:20px;padding:3px 9px;display:inline-block;";}
+function SEL(){return I()+"padding:12px 28px 12px 14px;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22%3E%3Cpath fill=%22%2364748b%22 d=%22M6 8L1 3h10z%22/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 12px center;";}
+
+// ── INIT ──────────────────────────────────────────────
+fbGet("_v2init").then(function(snap){
+  if(!snap.exists()){
+    var uo={1:{id:1,nome:"Síndico",login:"sindico",senha:"1234",role:"sindico"},2:{id:2,nome:"Subsíndico",login:"subsindico",senha:"1234",role:"subsindico"}};
+    var ao={};["101","102","103","104","105","106"].forEach(function(n){ao[n]={id:n,numero:n,morador:"",telefone:"",email:"",blocoId:"",ativo:true};});
+    var po={};po[ANO_ATUAL]={};["101","102","103","104","105","106"].forEach(function(n){po[ANO_ATUAL][n]={};MO.forEach(function(m){po[ANO_ATUAL][n][m]={pago:false,data:""};});});
+    return Promise.all([fbSet("users",uo),fbSet("cfg",{nomeCondominio:"",endereco:"",ano:ANO_ATUAL,taxaMensal:50,saldoCaixa:0,blocos:false}),fbSet("apts",ao),fbSet("pay",po),fbSet("_v2init",true)]);
+  }
+}).then(function(){
+  try{var s=sessionStorage.getItem("cu");if(s)ST.user=JSON.parse(s);}catch(e){}
+  fbOn("users",function(v){ST.users=v?Object.values(v):[];pintar();});
+  fbOn("cfg",function(v){if(v)ST.cfg=Object.assign({nomeCondominio:"",endereco:"",ano:ANO_ATUAL,taxaMensal:50,saldoCaixa:0,blocos:false},v);pintar();});
+  fbOn("blocos",function(v){ST.blocos=v?Object.values(v):[];pintar();});
+  fbOn("apts",function(v){ST.apts=v?Object.values(v).filter(function(a){return a.ativo;}):[];pintar();});
+  fbOn("pay",function(v){ST.pay=v||{};pintar();});
+  fbOn("desp",function(v){ST.desp=v?Object.values(v).sort(function(a,b){return b.id-a.id;}):[];pintar();});
+  fbOn("avisos",function(v){ST.avisos=v?Object.values(v).sort(function(a,b){return b.id-a.id;}):[];pintar();});
+  ST.loading=false;pintar();
+}).catch(function(e){console.error(e);ST.loading=false;pintar();});
+
+// ── AÇÕES ─────────────────────────────────────────────
+function irPara(t){ST.tela=t;ST.aptForm=null;ST.despForm=null;ST.despEditId=null;ST.avisoForm=null;pintar();}
+function voltar(){
+  if(ST.tela==="apt_d")ST.tela="apts";
+  else if(ST.tela==="mes_d")ST.tela="meses";
+  else ST.tela="home";
+  pintar();
+}
+function sair(){try{sessionStorage.removeItem("cu");}catch(e){}ST.user=null;ST.tela="home";pintar();}
+
+function fazerLogin(){
+  var u=gval("fu").trim(),s=gval("fs");
+  var found=ST.users.find(function(x){return x.login===u&&x.senha===s;});
+  if(found){ST.user=found;try{sessionStorage.setItem("cu",JSON.stringify(found));}catch(e){}ST.tela="home";pintar();toast("Bem-vindo, "+found.nome+"!");}
+  else{var e=document.getElementById("ferr");if(e){e.style.display="block";e.textContent="⚠️ Login ou senha incorretos.";}}
+}
+
+function marcarPagamento(aptId,mes){
+  var ano=ST.selAno;
+  var cur=(ST.pay[ano]&&ST.pay[ano][aptId]&&ST.pay[ano][aptId][mes]&&ST.pay[ano][aptId][mes].pago)||false;
+  var tx=+ST.cfg.taxaMensal||0;
+  var ns=(+ST.cfg.saldoCaixa||0)+(!cur?tx:-tx);
+  fbUpd("pay/"+ano+"/"+aptId+"/"+mes,{pago:!cur,data:!cur?hoje():""}).then(function(){return fbUpd("cfg",{saldoCaixa:ns});}).then(function(){toast(!cur?"✅ Pago! Saldo atualizado.":"Pagamento desmarcado");});
+}
+
+function abrirApt(id){ST.selAptId=id;ST.tela="apt_d";pintar();}
+function abrirMes(i){ST.selMes=i;ST.tela="mes_d";pintar();}
+
+function whatsappInadimp(apt,mes){
+  var tx=fmt(ST.cfg.taxaMensal||50);
+  var msg="Olá "+apt.morador+"! Informamos que a taxa de condomínio de *"+MF[mes]+"* no valor de *R$ "+tx+"* referente ao Apt "+apt.numero+" está em aberto. Por favor, entre em contato para regularizar. "+ST.cfg.nomeCondominio;
+  var tel=apt.telefone?apt.telefone.replace(/\D/g,""):"";
+  var url="https://wa.me/55"+tel+"?text="+encodeURIComponent(msg);
+  window.open(url,"_blank");
+}
+
+function toggleFormApt(){ST.aptForm=ST.aptForm?null:{};pintar();}
+function cancelarFormApt(){ST.aptForm=null;pintar();}
+function salvarNovoApt(){
+  var n=gval("an").trim();
+  if(!n){toast("Informe o número","err");return;}
+  if(ST.apts.find(function(a){return a.id===n;})){toast("Já existe","err");return;}
+  var blocoId=gval("abk")||"";
+  var novo={id:n,numero:n,morador:gval("am"),telefone:gval("at"),email:gval("ae"),blocoId:blocoId,ativo:true};
+  var po={};MO.forEach(function(m){po[m]={pago:false,data:""};});
+  // init pay for all years if needed
+  var payUpd={};
+  payUpd["pay/"+ST.selAno+"/"+n]=po;
+  Promise.all([fbSet("apts/"+n,novo),db.ref().update(payUpd)]).then(function(){ST.aptForm=null;toast("Apt "+n+" adicionado!");});
+}
+
+function abrirEditApt(id){ST.aptEditId=id;ST.cfgTab="apts";pintar();}
+function cancelarEditApt(){ST.aptEditId=null;pintar();}
+function salvarEditApt(){
+  var a=aptById(ST.aptEditId);if(!a)return;
+  var upd=Object.assign({},a,{numero:gval("ean")||a.numero,morador:gval("eam"),telefone:gval("eat"),email:gval("eae"),blocoId:gval("eabk")||""});
+  fbSet("apts/"+upd.id,upd).then(function(){ST.aptEditId=null;toast("✓ Apartamento salvo!");});
+}
+function confirmarRemoverApt(id){
+  var a=aptById(id);if(!a)return;
+  ST.modal={titulo:"Remover Apt "+a.numero+"?",msg:"Os pagamentos também serão removidos.",cor:"#ef4444",label:"Remover",fn:function(){
+    fbUpd("apts/"+id,{ativo:false}).then(function(){ST.modal=null;toast("Apartamento removido");});
+  }};pintar();
+}
+
+// BLOCOS
+function salvarBloco(){
+  var nome=gval("bnome").trim();
+  if(!nome){toast("Informe o nome do bloco","err");return;}
+  if(ST.blocoEditId){
+    fbSet("blocos/"+ST.blocoEditId,{id:ST.blocoEditId,nome:nome}).then(function(){ST.blocoEditId=null;toast("✓ Bloco salvo!");pintar();});
+  } else {
+    var id="bloco_"+Date.now();
+    fbSet("blocos/"+id,{id:id,nome:nome}).then(function(){toast("Bloco "+nome+" adicionado!");pintar();});
+  }
+}
+function editarBloco(id){ST.blocoEditId=id;pintar();}
+function cancelarBloco(){ST.blocoEditId=null;pintar();}
+function removerBloco(id){
+  fbDel("blocos/"+id).then(function(){toast("Bloco removido");});
+}
+
+// USUÁRIOS
+function abrirEditUser(id){ST.userEditId=id;ST.cfgTab="usuarios";pintar();}
+function cancelarEditUser(){ST.userEditId=null;pintar();}
+function salvarEditUser(){
+  var u=userById(ST.userEditId);if(!u)return;
+  var nome=gval("eun"),login=gval("eul"),senha=gval("eus"),role=gval("eur");
+  if(!nome||!login||!senha){toast("Preencha todos os campos","err");return;}
+  var upd=Object.assign({},u,{nome:nome,login:login,senha:senha,role:role});
+  fbSet("users/"+u.id,upd).then(function(){
+    if(ST.user&&ST.user.id===u.id){ST.user=upd;try{sessionStorage.setItem("cu",JSON.stringify(upd));}catch(e){}}
+    ST.userEditId=null;toast("✓ Usuário salvo!");
+  });
+}
+
+function mudarCfgTab(t){ST.cfgTab=t;ST.aptEditId=null;ST.userEditId=null;ST.blocoEditId=null;pintar();}
+
+function salvarCfgGeral(){
+  var usaBlocos=document.getElementById("cblocos")&&document.getElementById("cblocos").checked;
+  var upd=Object.assign({},ST.cfg,{nomeCondominio:gval("cn"),endereco:gval("ce"),ano:parseInt(gval("ca"))||ANO_ATUAL,blocos:usaBlocos});
+  fbSet("cfg",upd).then(function(){toast("✓ Configurações salvas!");});
+}
+function salvarTaxa(){
+  var tx=parseFloat(gval("ct"))||50;
+  fbUpd("cfg",{taxaMensal:tx}).then(function(){toast("✓ Taxa salva!");});
+}
+function abrirAjusteSaldo(){ST.modal={tipo:"saldo"};pintar();}
+function salvarSaldo(){
+  var v=parseFloat(gval("mvs"))||0;
+  fbUpd("cfg",{saldoCaixa:v}).then(function(){ST.modal=null;toast("✓ Saldo atualizado!");});
+}
+function fecharModal(){ST.modal=null;pintar();}
+function executarModal(){if(ST.modal&&ST.modal.fn)ST.modal.fn();}
+
+function novoAno(){
+  var novoA=ST.selAno+1;
+  var po={};ST.apts.forEach(function(a){po[a.id]={};MO.forEach(function(m){po[a.id][m]={pago:false,data:""};});});
+  fbSet("pay/"+novoA,po).then(function(){ST.selAno=novoA;toast("Ano "+novoA+" iniciado!");pintar();});
+}
+function mudarAno(a){ST.selAno=parseInt(a);pintar();}
+
+function confirmarReset(){
+  ST.modal={titulo:"Zerar dados do ano "+ST.selAno+"?",msg:"Pagamentos e despesas deste ano serão apagados.",cor:"#ef4444",label:"Zerar",fn:function(){
+    var po={};ST.apts.forEach(function(a){po[a.id]={};MO.forEach(function(m){po[a.id][m]={pago:false,data:""};});});
+    var despAno=ST.desp.filter(function(d){return String(d.ano||ANO_ATUAL)===String(ST.selAno);});
+    var ps=[fbSet("pay/"+ST.selAno,po)];
+    despAno.forEach(function(d){ps.push(fbDel("desp/"+d.id));});
+    Promise.all(ps).then(function(){ST.modal=null;toast("Dados zerados!");});
+  }};pintar();
+}
+
+// DESPESAS
+function setDespFiltro(m){ST.despFiltro=m;pintar();}
+function toggleFormDesp(){
+  if(ST.despForm){ST.despForm=null;ST.despEditId=null;}
+  else{ST.despForm={desc:"",valor:"",data:hoje(),cat:"luz",obs:""};ST.despEditId=null;}
+  pintar();
+}
+function cancelarFormDesp(){ST.despForm=null;ST.despEditId=null;pintar();}
+function salvarDesp(){
+  var desc=gval("dd").trim(),val=gval("dv");
+  if(!desc||!val){toast("Preencha descrição e valor","err");return;}
+  var dtISO=gval("ddt");
+  var dt=isoToBr(dtISO)||hoje();
+  var mes=mesDoIso(dtISO);
+  var f={desc:desc,valor:parseFloat(val),data:dt,mes:mes,cat:gval("dc")||"luz",obs:gval("dob")||"",ano:ST.selAno,pago:false};
+  if(ST.despEditId){
+    var eid=ST.despEditId;
+    var old=ST.desp.find(function(d){return String(d.id)===String(eid);});
+    var ns=+ST.cfg.saldoCaixa||0;
+    if(old&&old.pago){ns+=+old.valor;ns-=f.valor;}
+    var p2=[fbUpd("desp/"+eid,f)];
+    if(old&&old.pago)p2.push(fbUpd("cfg",{saldoCaixa:ns}));
+    Promise.all(p2).then(function(){ST.despForm=null;ST.despEditId=null;toast("✓ Atualizada!");});
+  }else{
+    var id=Date.now();
+    fbSet("desp/"+id,Object.assign({},f,{id:id})).then(function(){ST.despForm=null;toast("Despesa adicionada!");});
+  }
+}
+function editarDesp(id){
+  var d=ST.desp.find(function(x){return String(x.id)===String(id);});if(!d)return;
+  ST.despEditId=id;ST.despForm={desc:d.desc,valor:String(d.valor),data:d.data||hoje(),cat:d.cat,obs:d.obs||""};pintar();
+}
+function pagarDesp(id){
+  var d=ST.desp.find(function(x){return String(x.id)===String(id);});if(!d)return;
+  var ns=(+ST.cfg.saldoCaixa||0)+(d.pago?+d.valor:-(+d.valor));
+  Promise.all([fbUpd("desp/"+id,{pago:!d.pago}),fbUpd("cfg",{saldoCaixa:ns})]).then(function(){toast(d.pago?"Desmarcada":"💸 Pago! Saldo atualizado.");});
+}
+function confirmarDelDesp(id){
+  ST.modal={titulo:"Excluir despesa?",msg:"Não pode ser desfeito.",cor:"#ef4444",label:"Excluir",fn:function(){
+    var d=ST.desp.find(function(x){return String(x.id)===String(id);});
+    var ns=d&&d.pago?(+ST.cfg.saldoCaixa||0)+(+d.valor):+ST.cfg.saldoCaixa||0;
+    var ps=[fbDel("desp/"+id)];
+    if(d&&d.pago)ps.push(fbUpd("cfg",{saldoCaixa:ns}));
+    Promise.all(ps).then(function(){ST.modal=null;toast("Removida");});
+  }};pintar();
+}
+
+// AVISOS
+function setAvisoFiltro(f){ST.avisoFiltro=f;pintar();}
+function toggleFormAviso(){ST.avisoForm=ST.avisoForm?null:{titulo:"",texto:"",tipo:"info"};pintar();}
+function cancelarAviso(){ST.avisoForm=null;pintar();}
+function salvarAviso(){
+  var titulo=gval("ati").trim(),texto=gval("atx").trim();
+  if(!titulo||!texto){toast("Preencha título e texto","err");return;}
+  var id=Date.now();
+  fbSet("avisos/"+id,{id:id,titulo:titulo,texto:texto,tipo:gval("atp")||"info",data:hoje(),autor:ST.user?ST.user.nome:"",lidos:{}}).then(function(){ST.avisoForm=null;toast("✓ Aviso publicado!");});
+}
+function marcarLido(id){
+  if(!ST.user)return;
+  fbUpd("avisos/"+id+"/lidos",{[ST.user.id]:true});
+}
+function confirmarDelAviso(id){
+  ST.modal={titulo:"Excluir aviso?",msg:"O aviso será removido para todos.",cor:"#ef4444",label:"Excluir",fn:function(){fbDel("avisos/"+id).then(function(){ST.modal=null;toast("Aviso removido");});}};pintar();
+}
+
+// PDF
+function gerarPDF(){
+  try{
+    var doc=new window.jspdf.jsPDF();
+    var arr=totalArr();
+    var despAno=ST.desp.filter(function(d){return String(d.ano||ANO_ATUAL)===String(ST.selAno);});
+    var despPagas=despAno.filter(function(d){return d.pago;}).reduce(function(s,d){return s+(+d.valor||0);},0);
+    var y=20;
+    doc.setFontSize(18);doc.setFont("helvetica","bold");
+    doc.text(ST.cfg.nomeCondominio||"Condomínio",105,y,{align:"center"});
+    y+=8;doc.setFontSize(11);doc.setFont("helvetica","normal");
+    doc.text("Relatório Financeiro — Ano "+ST.selAno,105,y,{align:"center"});
+    y+=6;doc.text(ST.cfg.endereco||"",105,y,{align:"center"});
+    y+=10;doc.setDrawColor(200);doc.line(15,y,195,y);y+=8;
+    doc.setFontSize(13);doc.setFont("helvetica","bold");doc.text("Resumo Geral",15,y);y+=8;
+    doc.setFontSize(11);doc.setFont("helvetica","normal");
+    doc.text("Total arrecadado: R$ "+fmt(arr),15,y);y+=6;
+    doc.text("Total despesas pagas: R$ "+fmt(despPagas),15,y);y+=6;
+    doc.text("Saldo em caixa: R$ "+fmt(ST.cfg.saldoCaixa),15,y);y+=6;
+    doc.text("Taxa mensal: R$ "+fmt(ST.cfg.taxaMensal)+" por apartamento",15,y);y+=10;
+    doc.line(15,y,195,y);y+=8;
+    doc.setFontSize(13);doc.setFont("helvetica","bold");doc.text("Adimplência por Mês",15,y);y+=8;
+    doc.setFontSize(10);doc.setFont("helvetica","normal");
+    MO.forEach(function(m,i){
+      var pct=pctMes(m,ST.selAno);
+      doc.text(MF[i]+": "+pct+"% pagos",15,y);y+=5;
+      if(y>270){doc.addPage();y=20;}
+    });
+    y+=4;doc.line(15,y,195,y);y+=8;
+    doc.setFontSize(13);doc.setFont("helvetica","bold");doc.text("Inadimplentes (mês atual)",15,y);y+=8;
+    var mi=new Date().getMonth();
+    var inadimp=ST.apts.filter(function(a){return!(ST.pay[ST.selAno]&&ST.pay[ST.selAno][a.id]&&ST.pay[ST.selAno][a.id][MO[mi]]&&ST.pay[ST.selAno][a.id][MO[mi]].pago);});
+    doc.setFontSize(10);doc.setFont("helvetica","normal");
+    if(!inadimp.length){doc.text("Nenhum inadimplente!",15,y);y+=6;}
+    else{inadimp.forEach(function(a){doc.text("Apt "+a.numero+(a.morador?" — "+a.morador:""),15,y);y+=5;if(y>270){doc.addPage();y=20;}});}
+    y+=4;doc.line(15,y,195,y);y+=8;
+    doc.setFontSize(13);doc.setFont("helvetica","bold");doc.text("Despesas do Ano",15,y);y+=8;
+    doc.setFontSize(10);doc.setFont("helvetica","normal");
+    if(!despAno.length){doc.text("Nenhuma despesa cadastrada.",15,y);y+=6;}
+    else{despAno.forEach(function(d){doc.text((d.pago?"[PAGO] ":"[PENDENTE] ")+d.desc+" — R$ "+fmt(d.valor)+" ("+d.mes+")",15,y);y+=5;if(y>270){doc.addPage();y=20;}});}
+    y+=6;doc.setFontSize(9);doc.setTextColor(150);doc.text("Gerado em "+hoje()+" | CondoGest Pro",105,285,{align:"center"});
+    doc.save("relatorio-"+ST.selAno+".pdf");
+    toast("✓ PDF gerado!");
+  }catch(e){console.error(e);toast("Erro ao gerar PDF","err");}
+}
+
+// ── RENDER ────────────────────────────────────────────
+function pintar(){
+  var el=document.getElementById("app");if(!el)return;
+  if(ST.loading){el.innerHTML='<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:14px"><div style="font-size:48px">🏢</div><div style="color:#64748b;font-weight:600;font-size:16px">Conectando...</div></div>';return;}
+  if(!ST.user){el.innerHTML=telaLogin();return;}
+  var avisosNaoLidos=ST.avisos.filter(function(a){return !(a.lidos&&a.lidos[ST.user.id]);}).length;
+  el.innerHTML=rToast()+rVoltar()+'<div style="padding-bottom:76px">'+renderTela()+'</div>'+rNav(avisosNaoLidos)+rModal();
+}
+
+function rToast(){if(!ST.toast)return"";return'<div style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:'+(ST.toast.tipo==="err"?"#ef4444":"#1e293b")+';color:#fff;border-radius:24px;padding:10px 22px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3);white-space:nowrap;pointer-events:none">'+ST.toast.msg+'</div>';}
+function rVoltar(){if(ST.tela!=="apt_d"&&ST.tela!=="mes_d")return"";return'<button onclick="voltar()" style="position:fixed;top:14px;left:14px;z-index:80;background:#fff;border:none;border-radius:20px;padding:7px 16px 7px 10px;font-size:14px;font-weight:700;color:#1e293b;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.15)">‹ Voltar</button>';}
+
+function rNav(badge){
+  var ac=ST.tela==="apt_d"?"apts":ST.tela==="mes_d"?"meses":ST.tela;
+  var itens=[["home","🏠","Início"],["apts","🚪","Apts"],["meses","📅","Meses"],["desp","💰","Gastos"],["avisos","📢","Avisos"],["cfg","⚙️","Config"]];
+  var html='<div style="position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:#fff;border-top:1.5px solid #e2e8f0;display:flex;z-index:70;padding-bottom:env(safe-area-inset-bottom,0)">';
+  itens.forEach(function(n){
+    var id=n[0],e=n[1],l=n[2],active=ac===id;
+    var badgeHtml=id==="avisos"&&badge>0?'<div style="position:absolute;top:6px;right:50%;margin-right:-18px;background:#ef4444;color:#fff;border-radius:99px;font-size:9px;font-weight:700;padding:1px 5px">'+badge+'</div>':"";
+    html+='<button onclick="irPara(\''+id+'\')" style="flex:1;background:none;border:none;padding:10px 2px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;position:relative">'+badgeHtml+'<span style="font-size:18px">'+e+'</span><span style="font-size:9px;font-weight:'+(active?700:500)+';color:'+(active?"#2563eb":"#94a3b8")+'">'+l+'</span>'+(active?'<div style="width:4px;height:4px;background:#2563eb;border-radius:99px"></div>':'')+'</button>';
+  });
+  return html+'</div>';
+}
+
+function rModal(){
+  if(!ST.modal)return"";
+  if(ST.modal.tipo==="saldo"){
+    return'<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200;padding:24px"><div style="background:#fff;border-radius:20px;padding:24px;width:100%;max-width:340px"><div style="font-size:28px;text-align:center;margin-bottom:8px">💰</div><div style="font-weight:800;font-size:16px;color:#1e293b;margin-bottom:4px;text-align:center">Ajustar Saldo</div><div style="color:#64748b;font-size:13px;margin-bottom:16px;text-align:center">Atual: <b>R$ '+fmt(ST.cfg.saldoCaixa)+'</b></div><label style="'+LBL()+'">NOVO SALDO (R$)</label><input id="mvs" type="number" min="0" step="0.01" style="'+I()+'margin-bottom:16px" value="'+(+ST.cfg.saldoCaixa||0)+'"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button onclick="fecharModal()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarSaldo()" style="'+BTN("#2563eb")+'">Salvar</button></div></div></div>';
+  }
+  return'<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200;padding:24px"><div style="background:#fff;border-radius:20px;padding:24px;width:100%;max-width:340px"><div style="font-size:28px;text-align:center;margin-bottom:8px">⚠️</div><div style="font-weight:800;font-size:16px;color:#1e293b;margin-bottom:8px;text-align:center">'+ST.modal.titulo+'</div><div style="color:#64748b;font-size:14px;margin-bottom:20px;text-align:center">'+ST.modal.msg+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button onclick="fecharModal()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="executarModal()" style="'+BTN(ST.modal.cor||"#ef4444")+'">'+ST.modal.label+'</button></div></div></div>';
+}
+
+function renderTela(){
+  if(ST.tela==="home")return telaHome();
+  if(ST.tela==="apts")return telaApts();
+  if(ST.tela==="apt_d")return telaAptD();
+  if(ST.tela==="meses")return telaMeses();
+  if(ST.tela==="mes_d")return telaMesD();
+  if(ST.tela==="desp")return telaDesp();
+  if(ST.tela==="avisos")return telaAvisos();
+  if(ST.tela==="cfg")return telaCfg();
+  return telaHome();
+}
+
+// ── SELETOR DE ANO ────────────────────────────────────
+function rSeletorAno(){
+  var anos=Object.keys(ST.pay).map(function(a){return parseInt(a);}).filter(function(a){return!isNaN(a);}).sort(function(a,b){return b-a;});
+  if(!anos.length)anos=[ANO_ATUAL];
+  var html='<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;background:#fff;border-radius:14px;padding:10px 14px;border:1.5px solid #e2e8f0">';
+  html+='<span style="font-size:12px;font-weight:700;color:#64748b">ANO:</span>';
+  html+='<select onchange="mudarAno(this.value)" style="border:none;background:none;font-weight:700;color:#1e293b;font-size:14px;cursor:pointer;flex:1">';
+  anos.forEach(function(a){html+='<option value="'+a+'"'+(ST.selAno===a?" selected":"")+'>'+a+'</option>';});
+  html+='</select>';
+  html+='<button onclick="novoAno()" style="background:#2563eb;color:#fff;border:none;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">+ Novo ano</button>';
+  return html+'</div>';
+}
+
+// ── LOGIN ─────────────────────────────────────────────
+function telaLogin(){
+  return'<div style="min-height:100vh;background:linear-gradient(160deg,#0f172a,#1e3a5f,#2563eb);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px"><div style="text-align:center;margin-bottom:32px"><div style="width:72px;height:72px;background:rgba(255,255,255,.1);border-radius:22px;display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 14px;border:1.5px solid rgba(255,255,255,.2)">🏢</div><div style="color:rgba(255,255,255,.5);font-size:11px;font-weight:700;letter-spacing:2px;margin-bottom:4px">CONDOGEST PRO</div><div style="color:#fff;font-size:22px;font-weight:900">'+(ST.cfg.nomeCondominio||"Gestão de Condomínio")+'</div></div><div style="background:#fff;border-radius:24px;padding:24px;width:100%;max-width:360px;box-shadow:0 24px 60px rgba(0,0,0,.35)"><div style="font-size:17px;font-weight:800;color:#1e293b;margin-bottom:20px">Entrar no sistema</div><div style="margin-bottom:14px"><label style="'+LBL()+'">USUÁRIO</label><input id="fu" style="'+I()+'" placeholder="sindico ou subsindico" autocapitalize="none"></div><div style="margin-bottom:6px;position:relative"><label style="'+LBL()+'">SENHA</label><input id="fs" type="password" style="'+I()+'" placeholder="••••••" onkeydown="if(event.key===\'Enter\')fazerLogin()"><button onclick="var x=document.getElementById(\'fs\');x.type=x.type===\'password\'?\'text\':\'password\'" style="position:absolute;right:12px;top:30px;background:none;border:none;color:#94a3b8;cursor:pointer;font-size:18px">👁</button></div><div id="ferr" style="display:none;background:#fef2f2;color:#ef4444;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;margin-top:10px;margin-bottom:4px"></div><button onclick="fazerLogin()" style="'+BTN("#2563eb")+'margin-top:14px">Entrar</button><div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:12px;font-size:12px;color:#64748b"><div style="font-weight:700;margin-bottom:4px">Acessos padrão:</div><div>👑 sindico / 1234</div><div>🔑 subsindico / 1234</div></div></div></div>';
+}
+
+// ── HOME ──────────────────────────────────────────────
+function telaHome(){
+  var arr=totalArr(),tx=+ST.cfg.taxaMensal||0,pot=ST.apts.length*12*tx,pct=pot?Math.round(arr/pot*100):0;
+  var mi=new Date().getMonth();
+  var inadimp=ST.apts.filter(function(a){return!(ST.pay[ST.selAno]&&ST.pay[ST.selAno][a.id]&&ST.pay[ST.selAno][a.id][MO[mi]]&&ST.pay[ST.selAno][a.id][MO[mi]].pago);});
+  var saldo=+ST.cfg.saldoCaixa||0;
+  var avisosNaoLidos=ST.avisos.filter(function(a){return!(a.lidos&&a.lidos[ST.user.id]);});
+  var html='<div class="fade"><div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:24px 20px 30px;border-radius:0 0 28px 28px;margin-bottom:16px">';
+  html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px"><div><div style="color:#93c5fd;font-size:11px;font-weight:700;letter-spacing:1.5px">CONDOGEST PRO</div><div style="color:#fff;font-size:18px;font-weight:900;margin-top:2px">'+(ST.cfg.nomeCondominio||"— Configure o nome —")+'</div><div style="color:#bfdbfe;font-size:12px;margin-top:2px">'+(ST.cfg.endereco||"Sem endereço")+' · '+ST.selAno+'</div></div><div style="text-align:right"><div style="color:#fbbf24;font-size:10px;font-weight:700">'+(ST.user.role==="sindico"?"👑":"🔑")+' '+ST.user.nome+'</div><button onclick="sair()" style="margin-top:6px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">Sair 🚪</button></div></div>';
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">';
+  [[ST.apts.length,"APTS","#bfdbfe"],[inadimp.length,"INADIMP.","#fca5a5"],[pct+"%","ARREC.","#86efac"]].forEach(function(x){html+='<div style="background:rgba(255,255,255,.12);border-radius:14px;padding:10px 6px;text-align:center"><div style="color:'+x[2]+';font-size:19px;font-weight:900">'+x[0]+'</div><div style="color:rgba(255,255,255,.6);font-size:9px;font-weight:700;margin-top:2px">'+x[1]+'</div></div>';});
+  html+='</div><div style="background:rgba(255,255,255,.1);border-radius:14px;padding:12px 14px"><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="color:rgba(255,255,255,.7);font-size:11px">Arrecadação '+ST.selAno+'</span><span style="color:#fff;font-weight:700;font-size:12px">R$ '+fmt(arr)+' / R$ '+fmt(pot)+'</span></div><div style="background:rgba(255,255,255,.15);border-radius:99px;height:7px"><div style="background:'+(pct>80?"#22c55e":pct>50?"#eab308":"#ef4444")+';width:'+Math.min(pct,100)+'%;height:7px;border-radius:99px"></div></div></div></div>';
+  html+='<div style="padding:0 16px">';
+  // Saldo
+  html+='<div style="background:linear-gradient(135deg,#065f46,#10b981);border-radius:20px;padding:18px;margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="color:#a7f3d0;font-size:11px;font-weight:700;letter-spacing:1px">💰 SALDO EM CAIXA</div><div style="color:#fff;font-size:28px;font-weight:900;margin-top:4px">R$ '+fmt(saldo)+'</div><div style="color:#d1fae5;font-size:12px;margin-top:4px">Entradas: R$ '+fmt(arr)+' · Saídas: R$ '+fmt(totalDespPagas())+'</div></div><div style="display:flex;flex-direction:column;gap:6px"><button onclick="abrirAjusteSaldo()" style="background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:12px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">✏️ Ajustar</button><button onclick="gerarPDF()" style="background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:12px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">📄 PDF</button></div></div></div>';
+  // Avisos não lidos
+  if(avisosNaoLidos.length){
+    html+='<div style="'+CARD("#fde68a","#fffbeb")+'margin-bottom:16px"><div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:8px">📢 AVISOS NÃO LIDOS ('+avisosNaoLidos.length+')</div>';
+    avisosNaoLidos.slice(0,2).forEach(function(a){html+='<div style="margin-bottom:6px"><div style="font-weight:700;color:#1e293b;font-size:13px">'+a.titulo+'</div><div style="font-size:12px;color:#64748b">'+a.data+'</div></div>';});
+    html+='<button onclick="irPara(\'avisos\')" style="'+BTN("#f59e0b","#fff","auto")+'padding:7px 16px;font-size:12px;margin-top:4px">Ver todos</button></div>';
+  }
+  // Inadimplentes
+  if(inadimp.length){
+    html+='<div style="margin-bottom:16px"><div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:10px">⚠️ INADIMPLENTES — '+MF[mi].toUpperCase()+'</div>';
+    inadimp.slice(0,3).forEach(function(a){
+      html+='<div style="'+CARD("#fecaca","#fff5f5")+'display:flex;justify-content:space-between;align-items:center">';
+      html+='<button onclick="abrirApt(\''+a.id+'\')" style="flex:1;background:none;border:none;text-align:left;cursor:pointer"><div style="font-weight:700;color:#991b1b">Apt '+a.numero+(a.morador?" · "+a.morador:"")+'</div><div style="font-size:12px;color:#ef4444;margin-top:2px">'+MF[mi]+' pendente</div></button>';
+      if(a.telefone)html+='<button onclick="whatsappInadimp('+JSON.stringify(a).replace(/"/g,"&quot;")+','+mi+')" style="background:#22c55e;color:#fff;border:none;border-radius:10px;padding:8px 10px;font-size:18px;cursor:pointer;margin-left:8px">📱</button>';
+      html+='</div>';
+    });
+    if(inadimp.length>3)html+='<div style="text-align:center;color:#94a3b8;font-size:12px;padding:4px">+'+( inadimp.length-3)+' mais</div>';
+    html+='</div>';
+  }
+  // Acesso rápido
+  html+='<div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:10px">ACESSO RÁPIDO</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">';
+  [["🚪","Apartamentos","apts","#eff6ff","#bfdbfe"],["📅","Por Mês","meses","#f0fdf4","#bbf7d0"],["💰","Despesas","desp","#fffbeb","#fde68a"],["📢","Avisos","avisos","#fdf4ff","#e9d5ff"]].forEach(function(b){html+='<button onclick="irPara(\''+b[2]+'\')" style="background:'+b[3]+';border:1.5px solid '+b[4]+';border-radius:16px;padding:14px 12px;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px"><span style="font-size:20px">'+b[0]+'</span><span style="font-size:13px;font-weight:700;color:#1e293b">'+b[1]+'</span></button>';});
+  html+='</div>';
+  // Situação geral
+  html+='<div style="font-size:12px;font-weight:700;color:#64748b;letter-spacing:.8px;margin-bottom:10px">SITUAÇÃO GERAL — '+ST.selAno+'</div>';
+  if(!ST.apts.length)html+='<div style="text-align:center;color:#94a3b8;padding:24px;background:#fff;border-radius:16px">Nenhum apartamento. Configure em ⚙️.</div>';
+  ST.apts.forEach(function(a){var p=pctApt(a.id);html+='<button onclick="abrirApt(\''+a.id+'\')" style="width:100%;'+CARD()+'cursor:pointer;text-align:left"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div><span style="font-weight:800;color:#1e293b;font-size:15px">Apt '+a.numero+'</span>'+(ST.cfg.blocos&&a.blocoId?'<span style="'+BADGE("#eff6ff","#2563eb")+'margin-left:6px">'+nomeBloco(a.blocoId)+'</span>':'')+' <span style="color:#64748b;font-size:13px">'+(a.morador||"Sem morador")+'</span></div><span style="'+BADGE(p===100?"#dcfce7":p>50?"#fef9c3":"#fee2e2",p===100?"#16a34a":p>50?"#92400e":"#dc2626")+'">'+p+'%</span></div><div style="background:#f1f5f9;border-radius:99px;height:6px"><div style="background:'+(p===100?"#22c55e":p>50?"#eab308":"#ef4444")+';width:'+p+'%;height:6px;border-radius:99px"></div></div></button>';});
+  return html+'</div></div>';
+}
+
+// ── APARTAMENTOS ──────────────────────────────────────
+function telaApts(){
+  var html='<div class="fade" style="padding:0 16px 20px"><div style="padding-top:16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:18px;font-weight:800;color:#1e293b">Apartamentos</div><div style="font-size:12px;color:#64748b">'+ST.apts.length+' unidades</div></div><button onclick="toggleFormApt()" style="background:#2563eb;color:#fff;border:none;border-radius:12px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer">'+(ST.aptForm?"✕":"＋ Novo")+'</button></div>';
+  if(ST.aptForm){
+    var blocoOpts='<option value="">Sem bloco</option>';
+    if(ST.cfg.blocos)ST.blocos.forEach(function(b){blocoOpts+='<option value="'+b.id+'">'+b.nome+'</option>';});
+    html+='<div style="'+CARD("#bfdbfe","#eff6ff")+'margin-bottom:16px"><div style="font-weight:700;font-size:14px;color:#1e293b;margin-bottom:12px">Novo Apartamento</div>';
+    html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">NÚMERO *</label><input id="an" style="'+I()+'" placeholder="Ex: 201"></div>';
+    html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">MORADOR</label><input id="am" style="'+I()+'" placeholder="Nome completo"></div>';
+    html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">TELEFONE</label><input id="at" style="'+I()+'" placeholder="(11) 99999-9999"></div>';
+    html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">E-MAIL</label><input id="ae" style="'+I()+'" placeholder="email@exemplo.com"></div>';
+    if(ST.cfg.blocos)html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">BLOCO</label><select id="abk" style="'+SEL()+'">'+blocoOpts+'</select></div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px"><button onclick="cancelarFormApt()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarNovoApt()" style="'+BTN("#2563eb")+'">Adicionar</button></div></div>';
+  }
+  // Filtro por bloco
+  if(ST.cfg.blocos&&ST.blocos.length){
+    html+='<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:10px">';
+    html+='<button onclick="ST.blocoFiltro=\'\';pintar()" style="background:'+(ST.blocoFiltro?'#f1f5f9':'#2563eb')+';color:'+(ST.blocoFiltro?'#374151':'#fff')+';border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Todos</button>';
+    ST.blocos.forEach(function(b){html+='<button onclick="ST.blocoFiltro=\''+b.id+'\';pintar()" style="background:'+(ST.blocoFiltro===b.id?'#2563eb':'#f1f5f9')+';color:'+(ST.blocoFiltro===b.id?'#fff':'#374151')+';border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">'+b.nome+'</button>';});
+    html+='</div>';
+  }
+  var aptsFil=ST.apts;
+  if(ST.cfg.blocos&&ST.blocoFiltro)aptsFil=ST.apts.filter(function(a){return a.blocoId===ST.blocoFiltro;});
+  if(!aptsFil.length&&!ST.aptForm)html+='<div style="text-align:center;color:#94a3b8;padding:32px;background:#fff;border-radius:16px"><div style="font-size:36px;margin-bottom:8px">🚪</div><div>Nenhum apartamento</div></div>';
+  aptsFil.forEach(function(a){var p=pctApt(a.id);html+='<button onclick="abrirApt(\''+a.id+'\')" style="width:100%;'+CARD()+'cursor:pointer;text-align:left"><div style="display:flex;align-items:center;gap:12px"><div style="width:50px;height:50px;background:'+(p===100?"#dcfce7":p>0?"#fef9c3":"#f1f5f9")+';border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0"><div style="font-size:9px;color:#64748b;font-weight:600">APT</div><div style="font-size:17px;font-weight:900;color:#1e293b">'+a.numero+'</div></div><div style="flex:1;min-width:0"><div style="font-weight:700;color:#1e293b;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(a.morador||"Sem morador")+'</div>'+(ST.cfg.blocos&&a.blocoId?'<div style="font-size:11px;color:#2563eb;margin-top:1px">'+nomeBloco(a.blocoId)+'</div>':'')+(a.telefone?'<div style="font-size:12px;color:#64748b;margin-top:1px">'+a.telefone+'</div>':'')+' <div style="background:#f1f5f9;border-radius:99px;height:5px;margin-top:6px"><div style="background:'+(p===100?"#22c55e":p>50?"#eab308":"#ef4444")+';width:'+p+'%;height:5px;border-radius:99px"></div></div></div><div style="text-align:right;flex-shrink:0"><div style="font-weight:800;color:'+(p===100?"#16a34a":"#ef4444")+';font-size:15px">'+p+'%</div><div style="color:#94a3b8;font-size:18px">›</div></div></div></button>';});
+  return html+'</div>';
+}
+ST.blocoFiltro="";
+
+// ── APT DETALHE ───────────────────────────────────────
+function telaAptD(){
+  var a=aptById(ST.selAptId);if(!a)return"";
+  var tx=+ST.cfg.taxaMensal||50;
+  var payApt=ST.pay[ST.selAno]&&ST.pay[ST.selAno][a.id]||{};
+  var totalPago=MO.filter(function(m){return payApt[m]&&payApt[m].pago;}).length*tx;
+  var html='<div class="fade" style="padding-top:60px"><div style="background:linear-gradient(135deg,#1e3a5f,#2563eb);padding:16px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px"><div style="color:#93c5fd;font-size:11px;font-weight:700">APARTAMENTO</div><div style="color:#fff;font-size:24px;font-weight:900">Apt '+a.numero+'</div>';
+  if(ST.cfg.blocos&&a.blocoId)html+='<div style="color:#bfdbfe;font-size:12px">'+nomeBloco(a.blocoId)+'</div>';
+  html+='<div style="color:#bfdbfe;font-size:13px">'+(a.morador||"Sem morador")+'</div>';
+  if(a.telefone)html+='<div style="display:flex;align-items:center;gap:8px;margin-top:6px"><div style="color:#93c5fd;font-size:12px">📞 '+a.telefone+'</div><button onclick="whatsappInadimp('+JSON.stringify(a).replace(/"/g,"&quot;")+','+new Date().getMonth()+')" style="background:rgba(34,197,94,.3);color:#fff;border:none;border-radius:10px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">WhatsApp</button></div>';
+  html+='<div style="color:#86efac;font-size:13px;margin-top:6px;font-weight:700">Pago em '+ST.selAno+': R$ '+fmt(totalPago)+'</div></div>';
+  html+=rSeletorAno();
+  html+='<div style="padding:0 16px">';
+  MO.forEach(function(mes,i){
+    var p=(payApt[mes])||{pago:false,data:""};
+    html+='<div style="'+CARD(p.pago?"#bbf7d0":"#e2e8f0",p.pago?"#f0fdf4":"#fff")+'"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:800;color:#1e293b;font-size:15px">'+MF[i]+'</div>'+(p.data?'<div style="font-size:11px;color:#64748b;margin-top:2px">Pago em '+p.data+'</div>':'')+'</div><div style="display:flex;align-items:center;gap:10px"><div style="text-align:right"><div style="font-weight:700;color:#1e293b">R$ '+fmt(tx)+'</div><div style="font-size:10px;color:#64748b">taxa mensal</div></div><button onclick="marcarPagamento(\''+a.id+'\',\''+mes+'\')" style="background:'+(p.pago?"#22c55e":"#f1f5f9")+';border:none;border-radius:12px;padding:10px 14px;cursor:pointer;font-size:20px;line-height:1">'+(p.pago?"✅":"⬜")+'</button></div></div></div>';
+  });
+  return html+'</div></div>';
+}
+
+// ── MESES ─────────────────────────────────────────────
+function telaMeses(){
+  var html='<div class="fade" style="padding:0 16px 20px"><div style="padding-top:16px;margin-bottom:16px"><div style="font-size:18px;font-weight:800;color:#1e293b">Por Mês</div><div style="font-size:12px;color:#64748b">Janeiro a Dezembro</div></div>';
+  html+=rSeletorAno();
+  MO.forEach(function(mes,i){var p=pctMes(mes);html+='<button onclick="abrirMes('+i+')" style="width:100%;'+CARD()+'cursor:pointer;text-align:left"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:800;font-size:16px;color:#1e293b">'+MF[i]+'</div><span style="'+BADGE(p===100?"#dcfce7":p>50?"#fef9c3":"#fee2e2",p===100?"#16a34a":p>50?"#92400e":"#dc2626")+'">'+p+'%</span></div><div style="background:#f1f5f9;border-radius:99px;height:8px"><div style="background:'+(p===100?"#22c55e":p>50?"#eab308":"#ef4444")+';width:'+p+'%;height:8px;border-radius:99px"></div></div></button>';});
+  return html+'</div>';
+}
+
+// ── MES DETALHE ───────────────────────────────────────
+function telaMesD(){
+  var i=ST.selMes,mes=MO[i],tx=+ST.cfg.taxaMensal||50;
+  var payAno=ST.pay[ST.selAno]||{};
+  var pagos=ST.apts.filter(function(a){return payAno[a.id]&&payAno[a.id][mes]&&payAno[a.id][mes].pago;});
+  var html='<div class="fade" style="padding-top:60px"><div style="background:linear-gradient(135deg,#065f46,#10b981);padding:16px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px"><div style="color:#a7f3d0;font-size:11px;font-weight:700">MÊS — '+ST.selAno+'</div><div style="color:#fff;font-size:24px;font-weight:900">'+MF[i]+'</div><div style="color:#d1fae5;font-size:13px">'+pagos.length+'/'+ST.apts.length+' pagos · R$ '+fmt(pagos.length*tx)+'</div></div><div style="padding:0 16px">';
+  ST.apts.forEach(function(a){
+    var p=(payAno[a.id]&&payAno[a.id][mes])||{pago:false,data:""};
+    html+='<div style="'+CARD(p.pago?"#bbf7d0":"#e2e8f0",p.pago?"#f0fdf4":"#fff")+'"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:800;color:#1e293b">Apt '+a.numero+'</div>'+(ST.cfg.blocos&&a.blocoId?'<div style="font-size:10px;color:#2563eb">'+nomeBloco(a.blocoId)+'</div>':'')+'<div style="font-size:12px;color:#64748b">'+(a.morador||"Sem morador")+'</div>'+(p.data?'<div style="font-size:11px;color:#64748b">Pago em '+p.data+'</div>':'')+'</div><div style="display:flex;align-items:center;gap:8px">';
+    if(a.telefone&&!p.pago)html+='<button onclick="whatsappInadimp('+JSON.stringify(a).replace(/"/g,"&quot;")+','+i+')" style="background:#22c55e;color:#fff;border:none;border-radius:10px;padding:8px;font-size:16px;cursor:pointer">📱</button>';
+    html+='<div style="text-align:right"><div style="font-weight:700;color:#1e293b">R$ '+fmt(tx)+'</div><span style="'+BADGE(p.pago?"#dcfce7":"#fee2e2",p.pago?"#16a34a":"#dc2626")+'">'+(p.pago?"✓ Pago":"Pendente")+'</span></div><button onclick="marcarPagamento(\''+a.id+'\',\''+mes+'\')" style="background:'+(p.pago?"#22c55e":"#f1f5f9")+';border:none;border-radius:12px;padding:10px 14px;cursor:pointer;font-size:20px">'+(p.pago?"✅":"⬜")+'</button></div></div></div>';
+  });
+  return html+'</div></div>';
+}
+
+// ── DESPESAS ──────────────────────────────────────────
+function telaDesp(){
+  var despAno=ST.desp.filter(function(d){return String(d.ano||ANO_ATUAL)===String(ST.selAno);});
+  var fil=ST.despFiltro==="Todos"?despAno:despAno.filter(function(d){return d.mes===ST.despFiltro;});
+  var tot=fil.reduce(function(s,d){return s+(+d.valor||0);},0);
+  var pago=fil.filter(function(d){return d.pago;}).reduce(function(s,d){return s+(+d.valor||0);},0);
+  var f=ST.despForm;
+  var html='<div class="fade" style="padding:0 0 20px"><div style="background:linear-gradient(135deg,#78350f,#f59e0b);padding:20px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px"><div style="color:#fde68a;font-size:11px;font-weight:700;letter-spacing:1px">DESPESAS — '+ST.selAno+'</div><div style="color:#fff;font-size:20px;font-weight:900;margin-bottom:12px">Gastos do Condomínio</div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">';
+  [["TOTAL",tot,"#fde68a"],["PAGO",pago,"#86efac"],["PENDENTE",tot-pago,"#fca5a5"]].forEach(function(x){html+='<div style="background:rgba(255,255,255,.13);border-radius:12px;padding:10px 6px;text-align:center"><div style="color:'+x[2]+';font-size:9px;font-weight:700">'+x[0]+'</div><div style="color:#fff;font-weight:800;font-size:12px;margin-top:2px">R$ '+fmt(x[1])+'</div></div>';});
+  html+='</div></div><div style="padding:0 16px">';
+  html+=rSeletorAno();
+  html+='<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:10px">';
+  ["Todos"].concat(MO).forEach(function(m){html+='<button onclick="setDespFiltro(\''+m+'\')" style="background:'+(ST.despFiltro===m?"#f59e0b":"#f1f5f9")+';color:'+(ST.despFiltro===m?"#fff":"#374151")+';border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+m+'</button>';});
+  html+='</div><button onclick="toggleFormDesp()" style="'+BTN("#f59e0b")+'margin-bottom:12px">'+(f?"✕ Fechar":"＋ Nova Despesa")+'</button>';
+  if(f){
+    var catOpts="";Object.keys(CATS).forEach(function(k){catOpts+='<option value="'+k+'"'+(f.cat===k?" selected":"")+'>'+CATS[k]+'</option>';});
+    html+='<div style="'+CARD("#fde68a","#fffbeb")+'margin-bottom:14px"><div style="font-weight:800;color:#1e293b;font-size:15px;margin-bottom:14px">'+(ST.despEditId?"✏️ Editar":"➕ Nova")+' Despesa</div>';
+    html+='<div style="margin-bottom:12px"><label style="'+LBL()+'">DESCRIÇÃO *</label><input id="dd" style="'+I()+'" placeholder="Ex: Conta de luz" value="'+(f.desc||"")+'"></div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px"><div><label style="'+LBL()+'">VALOR (R$) *</label><input id="dv" type="number" min="0" step="0.01" style="'+I()+'" placeholder="0,00" value="'+(f.valor||"")+'"></div><div><label style="'+LBL()+'">DATA</label><input id="ddt" type="date" style="'+I()+'" value="'+(brToIso(f.data)||brToIso(hoje()))+'"></div></div>';
+    html+='<div style="margin-bottom:12px"><label style="'+LBL()+'">CATEGORIA</label><select id="dc" style="'+SEL()+'">'+catOpts+'</select></div>';
+    html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">OBSERVAÇÕES</label><input id="dob" style="'+I()+'" placeholder="Ex: Nº nota fiscal..." value="'+(f.obs||"")+'"></div>';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button onclick="cancelarFormDesp()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarDesp()" style="'+BTN("#f59e0b")+'">'+(ST.despEditId?"Salvar":"Adicionar")+'</button></div></div>';
+  }
+  if(!fil.length)html+='<div style="text-align:center;color:#94a3b8;padding:32px;background:#fff;border-radius:16px"><div style="font-size:32px;margin-bottom:8px">💰</div><div>Nenhuma despesa'+(ST.despFiltro!=="Todos"?" em "+ST.despFiltro:"")+'.</div></div>';
+  fil.forEach(function(d){var cc=CATC[d.cat]||"#94a3b8";html+='<div style="'+CARD()+'"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div style="flex:1;margin-right:10px"><div style="font-weight:700;color:#1e293b;font-size:14px">'+d.desc+'</div><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><span style="'+BADGE(cc+"22",cc)+'">'+(CATS[d.cat]||d.cat)+'</span><span style="'+BADGE("#f1f5f9","#64748b")+'">'+d.mes+'</span>'+(d.data?'<span style="'+BADGE("#f1f5f9","#64748b")+'>📅 '+d.data+'</span>':'')+'</div>'+(d.obs?'<div style="font-size:12px;color:#94a3b8;margin-top:5px">📝 '+d.obs+'</div>':'')+'</div><div style="text-align:right;flex-shrink:0"><div style="font-weight:800;color:#1e293b;font-size:15px">R$ '+fmt(d.valor)+'</div><button onclick="pagarDesp(\''+d.id+'\')" style="margin-top:6px;background:'+(d.pago?"#dcfce7":"#fee2e2")+';color:'+(d.pago?"#16a34a":"#dc2626")+';border:none;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">'+(d.pago?"✓ Pago":"Pendente")+'</button></div></div><div style="display:flex;gap:8px"><button onclick="editarDesp(\''+d.id+'\')" style="flex:1;background:#f1f5f9;color:#374151;border:none;border-radius:10px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">✏️ Editar</button><button onclick="confirmarDelDesp(\''+d.id+'\')" style="flex:1;background:#fef2f2;color:#ef4444;border:none;border-radius:10px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">🗑 Excluir</button></div></div>';});
+  return html+'</div></div>';
+}
+
+// ── AVISOS ────────────────────────────────────────────
+function telaAvisos(){
+  var tipoC={info:"#3b82f6",urgente:"#ef4444",manutencao:"#10b981",assembleia:"#8b5cf6"};
+  var tipoL={info:"ℹ️ Informativo",urgente:"🚨 Urgente",manutencao:"🔧 Manutenção",assembleia:"📋 Assembleia"};
+  var fil=ST.avisoFiltro==="todos"?ST.avisos:ST.avisos.filter(function(a){return a.tipo===ST.avisoFiltro;});
+  var f=ST.avisoForm;
+  var html='<div class="fade" style="padding:0 0 20px"><div style="background:linear-gradient(135deg,#4c1d95,#7c3aed);padding:20px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px"><div style="color:#ddd6fe;font-size:11px;font-weight:700;letter-spacing:1px">COMUNICADOS</div><div style="color:#fff;font-size:20px;font-weight:900;margin-bottom:4px">Mural de Avisos</div><div style="color:#c4b5fd;font-size:13px">'+ST.avisos.length+' publicações</div></div>';
+  html+='<div style="padding:0 16px"><div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:10px">';
+  [["todos","Todos"],["info","Informativo"],["urgente","Urgente"],["manutencao","Manutenção"],["assembleia","Assembleia"]].forEach(function(x){html+='<button onclick="setAvisoFiltro(\''+x[0]+'\')" style="background:'+(ST.avisoFiltro===x[0]?"#7c3aed":"#f1f5f9")+';color:'+(ST.avisoFiltro===x[0]?"#fff":"#374151")+';border:none;border-radius:20px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+x[1]+'</button>';});
+  html+='</div>';
+  if(ST.user&&ST.user.role==="sindico"){
+    html+='<button onclick="toggleFormAviso()" style="'+BTN("#7c3aed")+'margin-bottom:12px">'+(f?"✕ Fechar":"📢 Novo Aviso")+'</button>';
+    if(f){
+      html+='<div style="'+CARD("#ddd6fe","#faf5ff")+'margin-bottom:14px"><div style="font-weight:800;color:#1e293b;font-size:15px;margin-bottom:14px">Novo Aviso</div>';
+      html+='<div style="margin-bottom:12px"><label style="'+LBL()+'">TÍTULO *</label><input id="ati" style="'+I()+'" placeholder="Ex: Reunião de condomínio" value=""></div>';
+      html+='<div style="margin-bottom:12px"><label style="'+LBL()+'">MENSAGEM *</label><textarea id="atx" style="'+I()+'height:100px;padding-top:12px" placeholder="Digite o comunicado..."></textarea></div>';
+      html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">TIPO</label><select id="atp" style="'+SEL()+'"><option value="info">ℹ️ Informativo</option><option value="urgente">🚨 Urgente</option><option value="manutencao">🔧 Manutenção</option><option value="assembleia">📋 Assembleia</option></select></div>';
+      html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button onclick="cancelarAviso()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarAviso()" style="'+BTN("#7c3aed")+'">Publicar</button></div></div>';
+    }
+  }
+  if(!fil.length)html+='<div style="text-align:center;color:#94a3b8;padding:32px;background:#fff;border-radius:16px"><div style="font-size:32px;margin-bottom:8px">📢</div><div>Nenhum aviso.</div></div>';
+  fil.forEach(function(a){
+    var tc=tipoC[a.tipo]||"#64748b";var tl=tipoL[a.tipo]||a.tipo;
+    var lido=a.lidos&&a.lidos[ST.user.id];
+    html+='<div style="'+CARD(lido?"#e2e8f0":"#7c3aed",lido?"#fff":"#faf5ff")+'"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><div style="flex:1"><span style="'+BADGE(tc+"22",tc)+'margin-bottom:6px;display:inline-block">'+tl+'</span><div style="font-weight:800;color:#1e293b;font-size:15px;margin-top:4px">'+a.titulo+'</div></div>'+(ST.user.role==="sindico"?'<button onclick="confirmarDelAviso(\''+a.id+'\')" style="background:#fef2f2;color:#ef4444;border:none;border-radius:10px;padding:6px 10px;font-size:12px;cursor:pointer;margin-left:8px">🗑</button>':'')+'</div><div style="font-size:14px;color:#374151;margin-bottom:10px;line-height:1.5">'+a.texto+'</div><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:11px;color:#94a3b8">'+a.data+(a.autor?" · "+a.autor:"")+'</div>'+(lido?'<span style="font-size:11px;color:#22c55e;font-weight:600">✓ Lido</span>':'<button onclick="marcarLido(\''+a.id+'\')" style="background:#eff6ff;color:#2563eb;border:none;border-radius:10px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Marcar como lido</button>')+'</div></div>';
+  });
+  return html+'</div></div>';
+}
+
+// ── CONFIG ────────────────────────────────────────────
+function telaCfg(){
+  var tab=ST.cfgTab;
+  var TABS=[["geral","⚙️ Geral"],["taxas","💲 Taxa"],["blocos","🏗 Blocos"],["apts","🚪 Apts"],["usuarios","👤 Usuários"],["dados","🗂 Dados"]];
+  var html='<div class="fade" style="padding:0 0 20px"><div style="background:linear-gradient(135deg,#1e293b,#334155);padding:20px 16px 24px;border-radius:0 0 24px 24px;margin-bottom:16px"><div style="color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:1px">CONFIGURAÇÕES</div><div style="color:#fff;font-size:20px;font-weight:900">CondoGest Pro</div></div>';
+  html+='<div style="display:flex;gap:6px;overflow-x:auto;padding:0 16px 12px">';
+  TABS.forEach(function(t){html+='<button onclick="mudarCfgTab(\''+t[0]+'\')" style="background:'+(tab===t[0]?"#1e293b":"#f1f5f9")+';color:'+(tab===t[0]?"#fff":"#374151")+';border:none;border-radius:20px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0">'+t[1]+'</button>';});
+  html+='</div><div style="padding:0 16px">';
+
+  if(tab==="geral"){
+    html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">NOME DO CONDOMÍNIO</label><input id="cn" style="'+I()+'" value="'+(ST.cfg.nomeCondominio||"")+'" placeholder="Ex: Residencial das Flores"></div>';
+    html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">ENDEREÇO</label><input id="ce" style="'+I()+'" value="'+(ST.cfg.endereco||"")+'" placeholder="Ex: Rua das Acácias, 123"></div>';
+    html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">ANO ATUAL</label><input id="ca" type="number" style="'+I()+'" value="'+(ST.cfg.ano||ANO_ATUAL)+'"></div>';
+    html+='<div style="margin-bottom:20px;display:flex;align-items:center;gap:12px;'+CARD()+'"><input type="checkbox" id="cblocos" style="width:18px;height:18px;cursor:pointer"'+(ST.cfg.blocos?" checked":"")+' onchange="document.getElementById(\'cblocos\').checked"><div><div style="font-weight:700;color:#1e293b">Usar Blocos</div><div style="font-size:12px;color:#64748b">Organizar apartamentos em blocos (A, B, C...)</div></div></div>';
+    html+='<button onclick="salvarCfgGeral()" style="'+BTN("#1e293b")+'">Salvar Configurações</button>';
+  }
+
+  if(tab==="taxas"){
+    html+='<div style="'+CARD("#bfdbfe","#eff6ff")+'margin-bottom:16px"><div style="font-size:13px;font-weight:600;color:#1e3a5f">💡 Taxa mensal cobrada por apartamento. Ao marcar como pago, o valor é somado ao saldo automaticamente.</div></div>';
+    html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">TAXA MENSAL POR APARTAMENTO (R$)</label><input id="ct" type="number" min="0" step="0.01" style="'+I()+'" value="'+(ST.cfg.taxaMensal||50)+'"></div>';
+    html+='<div style="'+CARD("#bbf7d0","#f0fdf4")+'margin-bottom:16px"><div style="color:#64748b;font-size:12px">Por apartamento/mês:</div><div style="font-weight:900;font-size:28px;color:#16a34a">R$ '+fmt(ST.cfg.taxaMensal||50)+'</div><div style="color:#64748b;font-size:12px;margin-top:4px">Potencial anual ('+ST.apts.length+' apts): <b>R$ '+fmt((+ST.cfg.taxaMensal||50)*ST.apts.length*12)+'</b></div></div>';
+    html+='<button onclick="salvarTaxa()" style="'+BTN("#16a34a")+'">Salvar Taxa</button>';
+  }
+
+  if(tab==="blocos"){
+    html+='<div style="'+CARD("#bfdbfe","#eff6ff")+'margin-bottom:16px"><div style="font-size:13px;font-weight:600;color:#1e3a5f">🏗 Configure os blocos do condomínio. Ative a opção "Usar Blocos" em Geral para habilitá-los.</div></div>';
+    if(ST.blocoEditId){
+      var b=blocoById(ST.blocoEditId)||{};
+      html+='<div style="'+CARD("#bfdbfe","#eff6ff")+'"><div style="font-weight:700;color:#1e293b;margin-bottom:12px">Editando bloco</div><div style="margin-bottom:12px"><label style="'+LBL()+'">NOME DO BLOCO</label><input id="bnome" style="'+I()+'" value="'+(b.nome||"")+'"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button onclick="cancelarBloco()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarBloco()" style="'+BTN("#2563eb")+'">Salvar</button></div></div>';
+    } else {
+      html+='<div style="'+CARD("#eff6ff","#eff6ff")+'margin-bottom:12px"><div style="font-weight:700;color:#1e293b;margin-bottom:10px">Novo Bloco</div><div style="margin-bottom:10px"><label style="'+LBL()+'">NOME (ex: Bloco A)</label><input id="bnome" style="'+I()+'" placeholder="Ex: Bloco A"></div><button onclick="salvarBloco()" style="'+BTN("#2563eb")+'">Adicionar Bloco</button></div>';
+      if(!ST.blocos.length)html+='<div style="text-align:center;color:#94a3b8;padding:24px">Nenhum bloco cadastrado.</div>';
+      ST.blocos.forEach(function(b){html+='<div style="'+CARD()+'"><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-weight:800;color:#1e293b">'+b.nome+'</div><div style="display:flex;gap:6px"><button onclick="editarBloco(\''+b.id+'\')" style="background:#eff6ff;color:#2563eb;border:none;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button><button onclick="removerBloco(\''+b.id+'\')" style="background:#fef2f2;color:#ef4444;border:none;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer">🗑</button></div></div></div>';});
+    }
+  }
+
+  if(tab==="apts"){
+    if(ST.aptEditId){
+      var ae=aptById(ST.aptEditId);
+      if(ae){
+        var blocoOpts2='<option value="">Sem bloco</option>';
+        ST.blocos.forEach(function(b){blocoOpts2+='<option value="'+b.id+'"'+(ae.blocoId===b.id?" selected":"")+'>'+b.nome+'</option>';});
+        html+='<div style="'+CARD("#bfdbfe","#eff6ff")+'"><div style="font-weight:700;color:#1e293b;margin-bottom:12px">Editando Apt '+ae.numero+'</div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">NÚMERO</label><input id="ean" style="'+I()+'" value="'+ae.numero+'"></div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">MORADOR</label><input id="eam" style="'+I()+'" value="'+(ae.morador||"")+'"></div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">TELEFONE</label><input id="eat" style="'+I()+'" value="'+(ae.telefone||"")+'"></div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">E-MAIL</label><input id="eae" style="'+I()+'" value="'+(ae.email||"")+'"></div>';
+        if(ST.cfg.blocos)html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">BLOCO</label><select id="eabk" style="'+SEL()+'">'+blocoOpts2+'</select></div>';
+        html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px"><button onclick="cancelarEditApt()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarEditApt()" style="'+BTN("#2563eb")+'">Salvar</button></div></div>';
+      }
+    } else {
+      ST.apts.forEach(function(a){html+='<div style="'+CARD()+'"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-weight:800;color:#1e293b;font-size:15px">Apt '+a.numero+'</div>'+(ST.cfg.blocos&&a.blocoId?'<div style="font-size:11px;color:#2563eb">'+nomeBloco(a.blocoId)+'</div>':'')+'<div style="font-size:13px;color:'+(a.morador?"#374151":"#cbd5e1")+';font-style:'+(a.morador?"normal":"italic")+'">'+(a.morador||"Sem morador")+'</div>'+(a.telefone?'<div style="font-size:12px;color:#64748b">'+a.telefone+'</div>':'')+'</div><div style="display:flex;gap:6px"><button onclick="abrirEditApt(\''+a.id+'\')" style="background:#eff6ff;color:#2563eb;border:none;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button><button onclick="confirmarRemoverApt(\''+a.id+'\')" style="background:#fef2f2;color:#ef4444;border:none;border-radius:10px;padding:8px 12px;font-size:13px;cursor:pointer">🗑</button></div></div></div>';});
+      if(!ST.apts.length)html+='<div style="text-align:center;color:#94a3b8;padding:24px">Nenhum apartamento.</div>';
+    }
+  }
+
+  if(tab==="usuarios"){
+    if(ST.userEditId){
+      var ue=userById(ST.userEditId);
+      if(ue){
+        html+='<div style="'+CARD("#ddd6fe","#faf5ff")+'"><div style="font-weight:700;color:#1e293b;margin-bottom:12px">Editando: '+ue.nome+'</div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">NOME</label><input id="eun" style="'+I()+'" value="'+ue.nome+'"></div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">LOGIN</label><input id="eul" style="'+I()+'" value="'+ue.login+'" autocapitalize="none"></div>';
+        html+='<div style="margin-bottom:10px"><label style="'+LBL()+'">SENHA</label><input id="eus" type="password" style="'+I()+'" value="'+ue.senha+'"></div>';
+        html+='<div style="margin-bottom:14px"><label style="'+LBL()+'">FUNÇÃO</label><select id="eur" style="'+SEL()+'"><option value="sindico"'+(ue.role==="sindico"?" selected":"")+'>Síndico</option><option value="subsindico"'+(ue.role==="subsindico"?" selected":"")+'>Subsíndico</option></select></div>';
+        html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button onclick="cancelarEditUser()" style="'+BTN("#e2e8f0","#64748b")+'">Cancelar</button><button onclick="salvarEditUser()" style="'+BTN("#7c3aed")+'">Salvar</button></div></div>';
+      }
+    } else {
+      ST.users.forEach(function(u){html+='<div style="'+CARD()+'"><div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:800;color:#1e293b">'+u.nome+'</div><div style="font-size:12px;color:#64748b">Login: <b>'+u.login+'</b> · '+(u.role==="sindico"?"Síndico":"Subsíndico")+'</div></div><button onclick="abrirEditUser('+u.id+')" style="background:#eff6ff;color:#2563eb;border:none;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer">✏️ Editar</button></div></div>';});
+    }
+  }
+
+  if(tab==="dados"){
+    html+='<div style="'+CARD("#bbf7d0","#f0fdf4")+'margin-bottom:12px"><div style="font-weight:700;color:#065f46;margin-bottom:4px">🔄 Sincronização em tempo real</div><div style="font-size:13px;color:#047857">Dados sincronizados entre todos os dispositivos via Firebase.</div></div>';
+    html+='<div style="'+CARD()+'margin-bottom:12px"><div style="font-weight:700;color:#1e293b;margin-bottom:4px">📄 Relatório PDF</div><div style="font-size:13px;color:#64748b;margin-bottom:12px">Gera relatório completo do ano com pagamentos, despesas e inadimplentes.</div><button onclick="gerarPDF()" style="'+BTN("#1e293b")+'">Gerar PDF — '+ST.selAno+'</button></div>';
+    html+='<div style="'+CARD()+'margin-bottom:12px"><div style="font-weight:700;color:#1e293b;margin-bottom:4px">🚪 Sair do sistema</div><div style="font-size:13px;color:#64748b;margin-bottom:12px">Encerra a sessão atual.</div><button onclick="sair()" style="'+BTN("#475569")+'">Sair do Sistema</button></div>';
+    html+='<div style="'+CARD("#fecaca","#fff5f5")+'"><div style="font-weight:700;color:#991b1b;margin-bottom:4px">⚠️ Zerar Dados do Ano</div><div style="font-size:13px;color:#7f1d1d;margin-bottom:12px">Remove pagamentos e despesas do ano '+ST.selAno+'. Histórico de outros anos é mantido.</div><button onclick="confirmarReset()" style="'+BTN("#ef4444")+'">Zerar Dados de '+ST.selAno+'</button></div>';
+  }
+
+  return html+'</div></div>';
+}
+</script>
+</body>
+</html>
